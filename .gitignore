@@ -1,0 +1,25 @@
+# Gradle / 构建产物
+.gradle/
+build/
+app/build/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 本机配置（SDK 路径，换台机器就不一样）
+local.properties
+
+# IDE
+*.iml
+.idea/
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+
+# 发布产物：APK / AAB / 签名文件都不进仓库
+*.apk
+*.aab
+*.jks
+*.keystore
