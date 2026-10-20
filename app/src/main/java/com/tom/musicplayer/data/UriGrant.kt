@@ -38,6 +38,37 @@ object UriGrant {
         return false
     }
 
+    /** 是否已经持有该 Uri 的持久化**写**授权（往授权文件夹里下载歌曲时需要）。 */
+    fun isPersistedWrite(context: Context, uri: Uri): Boolean = runCatching {
+        context.contentResolver.persistedUriPermissions.any {
+            it.uri == uri && it.isWritePermission
+        }
+    }.getOrDefault(false)
+
+    /**
+     * 尽力登记持久化写授权。
+     *
+     * 选文件夹时拿到的授权组合各家 ROM 不一样，有的只给了读。这里逐个试并校验结果，
+     * 全部失败时返回 false —— 调用方要据此提示用户「重新选一次文件夹」，
+     * 而不是写了一半才抛 SecurityException。
+     */
+    fun takeWrite(context: Context, uri: Uri): Boolean {
+        if (isPersistedWrite(context, uri)) return true
+        val read = Intent.FLAG_GRANT_READ_URI_PERMISSION
+        val write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val prefix = Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        for (flags in listOf(
+            read or write,
+            read or write or prefix,
+            read or write or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+            write
+        )) {
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+            if (isPersistedWrite(context, uri)) return true
+        }
+        return false
+    }
+
     /**
      * 兜底恢复：万一 Prefs 里的 treeUri 丢了，但系统还留着我们的持久化授权
      * （授权记在系统侧，不会跟着 App 数据消失），就用它把文件夹找回来。

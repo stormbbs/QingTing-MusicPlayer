@@ -4,6 +4,7 @@ package com.tom.musicplayer.player
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.os.Looper
@@ -622,7 +623,28 @@ object PlayerController {
         if (id == artworkId) return
         // 歌曲库可能还没加载完（服务先于扫描启动），此时先不标记，等下一次事件再补
         val song = _songs.value.firstOrNull { it.id == id } ?: return
-        // 远端曲目不在这里解内嵌封面：那相当于为了封面把整首歌先拉一遍，太贵
+        // 在线曲目：封面是音源给的一个 http 地址，直接拿来用，不用解码音频文件
+        if (song.isOnline) {
+            artworkId = id
+            val cover = song.coverUrl?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+            if (cover == null) {
+                DynamicSeed.reset()
+                return
+            }
+            artworkJob?.cancel()
+            artworkJob = scope.launch {
+                // 在线封面也能取主色，和本地歌一个待遇
+                withContext(Dispatchers.IO) { extractSeedColorFromUrl(cover.toString()) }
+                val current = playerRef ?: return@launch
+                val index = queueIds.indexOf(id)
+                if (index < 0 || current.currentMediaItemIndex != index) return@launch
+                if (current.currentMediaItem?.mediaMetadata?.artworkUri == null) {
+                    runCatching { current.replaceMediaItem(index, song.toMediaItem(cover)) }
+                }
+            }
+            return
+        }
+        // WebDAV 曲目不在这里解内嵌封面：那相当于为了封面把整首歌先拉一遍，太贵
         if (song.isRemote) {
             artworkId = id
             DynamicSeed.reset()
@@ -653,12 +675,22 @@ object PlayerController {
         }
     }
 
+    /** 在线封面取主色：图片来自音源给的 http 地址。 */
+    private fun extractSeedColorFromUrl(url: String) {
+        val bitmap = ArtworkLoader.remoteBitmap(url, 128) ?: return
+        applySeed(bitmap)
+    }
+
     /**
      * 从封面提取主色调给界面换色。
      * 过黑或过白的封面直接忽略：那种颜色当主色会让按钮和文字都变得难读。
      */
     private fun extractSeedColor(context: Context, audioUri: Uri) {
         val bitmap = ArtworkLoader.bitmap(context, audioUri, 128) ?: return
+        applySeed(bitmap)
+    }
+
+    private fun applySeed(bitmap: Bitmap) {
         val palette = runCatching { Palette.from(bitmap).generate() }.getOrNull() ?: return
         val swatch = palette.vibrantSwatch
             ?: palette.lightVibrantSwatch
@@ -810,12 +842,15 @@ object PlayerController {
     private fun Song.toMediaItem(artworkUri: Uri? = null): MediaItem {
         // artworkUri 必须是「图片」URI（这里指向我们导出的封面缩略图）：
         // 通知栏 / 锁屏会直接把 artworkUri 当图片解码，给它音频文件 Uri 只会解码失败。
+        // 在线歌曲的封面本来就是音源给的 http 图片地址，可以直接拿去用。
+        val art = artworkUri
+            ?: coverUrl?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
         val metadata = MediaMetadata.Builder()
             .setTitle(title)
             .setArtist(artist)
             .setAlbumTitle(album)
             .apply {
-                if (artworkUri != null) setArtworkUri(artworkUri)
+                if (art != null) setArtworkUri(art)
             }
             .build()
         return MediaItem.Builder()

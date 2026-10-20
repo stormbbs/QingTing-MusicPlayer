@@ -29,6 +29,36 @@ object ArtworkLoader {
     }
 
     /**
+     * 在线封面（音源返回的 http 地址）。
+     *
+     * 和 [bitmap] 分开是因为取色只需要很小的图：在线图片按 128px 采样，
+     * 既省流量也不会把一张 1000px 的封面塞进内存。
+     */
+    fun remoteBitmap(url: String, targetPx: Int = 128): Bitmap? {
+        val key = "$url@$targetPx"
+        bitmapCache.get(key)?.let { return it }
+        val decoded = runCatching {
+            val conn = java.net.URL(url).openConnection().apply {
+                connectTimeout = 10_000
+                readTimeout = 15_000
+            }
+            conn.getInputStream().use { stream ->
+                val bytes = stream.readBytes()
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+                val options = BitmapFactory.Options().apply {
+                    inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, targetPx)
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            }
+        }.getOrNull() ?: return null
+        bitmapCache.put(key, decoded)
+        return decoded
+    }
+
+    /**
      * 采样压缩后的封面字节（JPEG）。
      * 用于放进 MediaMetadata.artworkData —— 通知栏 / 锁屏 / 车机等外部界面
      * 拿不到我们 SAF 目录的读权限，只有把图片数据随元数据一起给出去才显示得出来。

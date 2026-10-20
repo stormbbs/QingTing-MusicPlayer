@@ -3,6 +3,7 @@
 package com.tom.musicplayer.player
 
 import android.content.Context
+import android.net.Uri
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -15,7 +16,10 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.SourceStore
+import com.tom.musicplayer.data.online.OnlineApi
+import com.tom.musicplayer.data.online.OnlineSourceStore
 import okhttp3.Credentials
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -69,15 +73,16 @@ object PlayerDataSources {
         }
 
     fun dataSourceFactory(context: Context): DataSource.Factory {
-        val httpFactory = OkHttpDataSource.Factory(okHttp(context.applicationContext))
+        val app = context.applicationContext
+        val httpFactory = OkHttpDataSource.Factory(okHttp(app))
             .setUserAgent(USER_AGENT)
-        val localFactory = DefaultDataSource.Factory(context.applicationContext, httpFactory)
+        val localFactory = DefaultDataSource.Factory(app, httpFactory)
         val cacheFactory = CacheDataSource.Factory()
-            .setCache(cache(context.applicationContext))
+            .setCache(cache(app))
             .setUpstreamDataSourceFactory(localFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         return DataSource.Factory {
-            SchemeRouterDataSource(cacheFactory.createDataSource(), localFactory.createDataSource())
+            SchemeRouterDataSource(app, cacheFactory.createDataSource(), localFactory.createDataSource())
         }
     }
 
@@ -123,11 +128,19 @@ private class WebDavAuthInterceptor(private val context: Context) : Interceptor 
     }
 }
 
+/** `qingting://online/<音源id>/<歌曲id>` —— 在线歌曲在队列里的长相。 */
+private const val ONLINE_SCHEME = "qingting"
+
 /**
- * 按 URI 决定走缓存还是直连：本地 content:// 直接放行，网络地址套缓存层。
+ * 按 URI 决定走哪条路：
+ * - `content://`（本地 SAF）→ 直连，没必要套缓存；
+ * - `http(s)://` → 套一层 SimpleCache，听过一次就能离线重播；
+ * - `qingting://` → 在线歌曲：先向音源解析出真实直链，再按 http 走缓存。
+ *
  * 缓存层一旦打开失败立刻降级到直连，绝不因为缓存问题让用户歌放不了。
  */
 private class SchemeRouterDataSource(
+    private val appContext: Context,
     private val cached: DataSource,
     private val direct: DataSource
 ) : DataSource {
@@ -140,15 +153,49 @@ private class SchemeRouterDataSource(
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val useCache = dataSpec.uri.scheme == "http" || dataSpec.uri.scheme == "https"
-        return if (useCache) {
-            try {
-                cached.open(dataSpec).also { active = cached }
-            } catch (e: IOException) {
-                direct.open(dataSpec).also { active = direct }
+        return when (dataSpec.uri.scheme) {
+            ONLINE_SCHEME -> openOnline(dataSpec)
+            "http", "https" -> {
+                try {
+                    cached.open(dataSpec).also { active = cached }
+                } catch (e: IOException) {
+                    direct.open(dataSpec).also { active = direct }
+                }
             }
-        } else {
-            direct.open(dataSpec).also { active = direct }
+            else -> direct.open(dataSpec).also { active = direct }
+        }
+    }
+
+    /**
+     * 在线歌曲：现解析直链再播。
+     *
+     * 直链普遍有时效（常见 10~30 分钟），所以不能提前把地址写进队列——
+     * 队列里放的是占位 URI，等到真的要读数据这一刻才去问音源要地址。
+     *
+     * 缓存 key 仍然用占位 URI：音源每次返回的直链可能带不同的签名串，
+     * 拿直链当 key 会让缓存永远 miss。
+     */
+    private fun openOnline(dataSpec: DataSpec): Long {
+        val parts = dataSpec.uri.pathSegments
+        if (parts.size < 2) throw IOException("在线歌曲地址不完整：${dataSpec.uri}")
+        val sourceId = parts[0]
+        val songId = parts[1]
+        val source = OnlineSourceStore.byId(appContext, sourceId)
+            ?: throw IOException("音源已被删除：$sourceId")
+        val resolved = try {
+            OnlineApi.resolveBlocking(source, songId, Prefs.getQuality(appContext))
+        } catch (e: Exception) {
+            throw IOException(e.message ?: "解析播放地址失败", e)
+        }
+        val real = Uri.parse(resolved.url)
+        val spec = dataSpec.buildUpon()
+            .setUri(real)
+            .setKey(dataSpec.key ?: dataSpec.uri.toString())
+            .build()
+        return try {
+            cached.open(spec).also { active = cached }
+        } catch (e: IOException) {
+            direct.open(spec).also { active = direct }
         }
     }
 

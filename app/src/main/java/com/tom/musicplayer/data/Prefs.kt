@@ -11,8 +11,30 @@ object Prefs {
     private const val KEY_LAST_ID = "last_song_id"
     private const val KEY_LAST_POSITION = "last_position"
     private const val KEY_WAS_PLAYING = "was_playing"
+    private const val KEY_QUALITY = "online_quality"
+    private const val KEY_DOWNLOAD_TARGET = "download_target"
 
     private fun sp(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+
+    /** 在线音质：standard / high / lossless。播放和下载都用这一档。 */
+    fun saveQuality(context: Context, quality: String) {
+        if (sp(context).getString(KEY_QUALITY, null) == quality) return
+        sp(context).edit().putString(KEY_QUALITY, quality).apply()
+    }
+
+    fun getQuality(context: Context): String = sp(context).getString(KEY_QUALITY, "high") ?: "high"
+
+    /**
+     * 下载落到哪：`app` = App 私有目录（「我的下载」页管理），
+     * `saf` = 用户授权的音乐文件夹（下载完直接被现有扫描收录，和本地歌混在一起）。
+     */
+    fun saveDownloadTarget(context: Context, target: String) {
+        if (sp(context).getString(KEY_DOWNLOAD_TARGET, null) == target) return
+        sp(context).edit().putString(KEY_DOWNLOAD_TARGET, target).apply()
+    }
+
+    fun getDownloadTarget(context: Context): String =
+        sp(context).getString(KEY_DOWNLOAD_TARGET, "app") ?: "app"
 
     /**
      * 低频且关键的配置（选过的文件夹、播放模式）用 commit 同步落盘：

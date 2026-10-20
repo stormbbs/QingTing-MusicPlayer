@@ -23,8 +23,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -77,6 +84,8 @@ fun AppRoot() {
     var folderUnreadable by remember { mutableStateOf(false) }
     var screen by remember { mutableStateOf(AppScreen.LIBRARY) }
     var rescanJob by remember { mutableStateOf<Job?>(null) }
+    // 从「在线」页进音源管理时，返回键要回在线页；从「我的」进则回「我的」
+    var returnToOnline by remember { mutableStateOf(false) }
 
     val songs by PlayerController.songs.collectAsStateWithLifecycle()
     val currentIndex by PlayerController.currentIndex.collectAsStateWithLifecycle()
@@ -185,6 +194,10 @@ fun AppRoot() {
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+        // 内容区占满除底栏外的空间：三个主页面都有底部导航，
+        // 播放页浮层要盖住全部，所以放在最外层的 Box 里
+        Box(modifier = Modifier.weight(1f)) {
         when (screen) {
             AppScreen.SOURCES -> SourcesScreen(
                 onBack = { screen = AppScreen.LIBRARY },
@@ -195,6 +208,48 @@ fun AppRoot() {
                     screen = AppScreen.LIBRARY
                     showPlayer = true
                 }
+            )
+            AppScreen.ONLINE -> OnlineScreen(
+                onPlaySongs = { list, index ->
+                    scope.launch {
+                        withPlayer(context) { PlayerController.playSongs(context, list, index) }
+                    }
+                    showPlayer = true
+                },
+                onOpenSources = {
+                    returnToOnline = true
+                    screen = AppScreen.ONLINE_SOURCES
+                }
+            )
+            AppScreen.ME -> MeScreen(
+                onOpenDownloads = { screen = AppScreen.DOWNLOADS },
+                onOpenPlaylists = { screen = AppScreen.PLAYLISTS },
+                onOpenSources = {
+                    returnToOnline = false
+                    screen = AppScreen.ONLINE_SOURCES
+                }
+            )
+            AppScreen.DOWNLOADS -> DownloadsScreen(
+                onBack = { screen = AppScreen.ME },
+                onPlay = { song ->
+                    scope.launch {
+                        withPlayer(context) { PlayerController.playSongs(context, listOf(song), 0) }
+                    }
+                    showPlayer = true
+                },
+                onPickFolder = { folderPicker.launch(null) }
+            )
+            AppScreen.PLAYLISTS -> PlaylistsScreen(
+                onBack = { screen = AppScreen.ME },
+                onPlay = { list, index ->
+                    scope.launch {
+                        withPlayer(context) { PlayerController.playSongs(context, list, index) }
+                    }
+                    showPlayer = true
+                }
+            )
+            AppScreen.ONLINE_SOURCES -> OnlineSourceScreen(
+                onBack = { screen = if (returnToOnline) AppScreen.ONLINE else AppScreen.ME }
             )
             AppScreen.LIBRARY -> LibraryScreen(
                 songs = songs,
@@ -231,6 +286,15 @@ fun AppRoot() {
                     scope.launch { withPlayer(context) { PlayerController.setMode(target) } }
                 }
             )
+        }
+        }
+
+        if (screen == AppScreen.LIBRARY || screen == AppScreen.ONLINE || screen == AppScreen.ME) {
+            BottomNav(
+                current = screen,
+                onSelect = { target -> screen = target }
+            )
+        }
         }
 
         AnimatedVisibility(
@@ -276,7 +340,37 @@ fun AppRoot() {
     BackHandler(enabled = showPlayer) { showPlayer = false }
 }
 
-private enum class AppScreen { LIBRARY, SOURCES }
+private enum class AppScreen {
+    LIBRARY, SOURCES, ONLINE, ME, DOWNLOADS, PLAYLISTS, ONLINE_SOURCES
+}
+
+/**
+ * 底部三个主页面。SOURCES（WebDAV）是列表页里的二级入口，不占底栏位置——
+ * 它属于「本地曲库」的延伸，而不是和在线音乐并列的一级功能。
+ */
+@Composable
+private fun BottomNav(current: AppScreen, onSelect: (AppScreen) -> Unit) {
+    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+        NavigationBarItem(
+            selected = current == AppScreen.LIBRARY,
+            onClick = { onSelect(AppScreen.LIBRARY) },
+            icon = { Icon(Icons.Default.LibraryMusic, contentDescription = "我的音乐") },
+            label = { Text("我的音乐") }
+        )
+        NavigationBarItem(
+            selected = current == AppScreen.ONLINE,
+            onClick = { onSelect(AppScreen.ONLINE) },
+            icon = { Icon(Icons.Default.Public, contentDescription = "在线") },
+            label = { Text("在线") }
+        )
+        NavigationBarItem(
+            selected = current == AppScreen.ME,
+            onClick = { onSelect(AppScreen.ME) },
+            icon = { Icon(Icons.Default.Person, contentDescription = "我的") },
+            label = { Text("我的") }
+        )
+    }
+}
 
 /** 列表副标题：本地曲库显示文件夹名，网络曲库显示来源提示。 */
 private fun sourceLabel(treeUri: Uri?, songs: List<Song>): String? {
@@ -296,7 +390,10 @@ private suspend fun withPlayer(context: Context, action: () -> Unit) {
         waited += 150
     }
     if (PlayerController.player == null) return
+    // 不要静默吞掉：播放指令抛异常时按钮「点了没反应」最难查，
+    // 这里把堆栈打到 logcat，adb logcat -s QingTing 就能看到
     runCatching { action() }
+        .onFailure { android.util.Log.e("QingTing", "播放指令执行失败", it) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

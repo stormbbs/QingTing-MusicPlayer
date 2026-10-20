@@ -7,6 +7,8 @@ import com.tom.musicplayer.model.LyricLine
 import com.tom.musicplayer.model.LyricSource
 import com.tom.musicplayer.model.Lyrics
 import com.tom.musicplayer.model.Song
+import com.tom.musicplayer.data.online.OnlineApi
+import com.tom.musicplayer.data.online.OnlineSourceStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
@@ -17,7 +19,7 @@ import java.security.MessageDigest
 /**
  * 歌词仓库：统一决定「这一首歌的歌词从哪来」。
  *
- * 优先级：歌曲自带的 .lrc 文件 → 本地已下载的缓存 → 在线搜索。
+ * 优先级：歌曲自带的 .lrc 文件 → 在线歌曲问音源要 → 本地已下载的缓存 → 在线搜索（LRCLIB）。
  * 下载到的歌词会落盘，下次打开不再联网；用户对不上的时候还可以手动挑条目 + 微调偏移。
  */
 object LyricsRepository {
@@ -50,7 +52,21 @@ object LyricsRepository {
             if (lines != null) return@withContext Lyrics(lines, LyricSource.EMBEDDED_FILE, offset)
         }
 
-        // 2) 之前下载过的
+        // 2) 在线歌曲先问音源要：音源自带歌词时不该再去公网瞎搜一遍
+        if (song.isOnline && song.onlineSourceId != null && song.onlineSongId != null) {
+            val source = OnlineSourceStore.byId(app, song.onlineSourceId)
+            if (source != null) {
+                val text = OnlineApi.lyric(source, song.onlineSongId)
+                val lines = text?.let { LrcParser.parse(it) }?.takeIf { it.isNotEmpty() }
+                if (lines != null) {
+                    // 顺手落一份缓存，下次离线也能看
+                    runCatching { cacheFile(app, song.id).writeText(text!!) }
+                    return@withContext Lyrics(lines, LyricSource.DOWNLOADED, offset)
+                }
+            }
+        }
+
+        // 3) 之前下载过的
         val cached = runCatching { cacheFile(app, song.id).readText() }.getOrNull()
         val cachedLines = cached?.let { LrcParser.parse(it) }?.takeIf { it.isNotEmpty() }
         if (cachedLines != null) {
