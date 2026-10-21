@@ -71,6 +71,21 @@ object PlayerController {
     private val _ready = MutableStateFlow(false)
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
+    /**
+     * 「接下来要播什么」——按 ExoPlayer 时间线顺序排好的队列，第一项就是正在播的。
+     *
+     * 界面只认这一份：顺序播是 [queueIds]，随机播是洗过的那条顺序，倒序是反过来的。
+     * 以前队列藏在内部（[queueIds]），用户看不到下一首是什么，也没法把某一首拖到前面，
+     * 只能反复点「下一首」摸过去。拖动排序改的是 [_songs] 的顺序，队列按新模式重排，
+     * 所以拖完的效果是持久的，不是只影响这一次播放。
+     */
+    private val _queue = MutableStateFlow<List<Song>>(emptyList())
+    val queue: StateFlow<List<Song>> = _queue.asStateFlow()
+
+    /** 时间线下标 → 「正在播的那首」在 [queue] 里的位置。 */
+    private val _queuePosition = MutableStateFlow(0)
+    val queuePosition: StateFlow<Int> = _queuePosition.asStateFlow()
+
     @Suppress("OPT_IN_USAGE")
     private val _sleep = MutableStateFlow(SleepState())
     val sleep: StateFlow<SleepState> = _sleep.asStateFlow()
@@ -287,6 +302,8 @@ object PlayerController {
         playerRef?.removeListener(listener)
         playerRef = null
         queueIds = emptyList()
+        _queue.value = emptyList()
+        _queuePosition.value = 0
         _ready.value = false
         _isPlaying.value = false
     }
@@ -308,6 +325,8 @@ object PlayerController {
 
         _songs.value = songs
         items = songs.map { it.toMediaItem() }
+        // 队列跟着列表走；播放器还没起来时也得先给界面一份能看的东西
+        if (playerRef == null) _queue.value = songs
 
         val player = playerRef
         if (player == null) {
@@ -334,6 +353,8 @@ object PlayerController {
         val player = playerRef
         if (player == null) {
             _currentIndex.value = index
+            _queue.value = songs
+            _queuePosition.value = index
             return
         }
         applyQueue(player, index, 0L, play = true)
@@ -846,8 +867,98 @@ object PlayerController {
 
         queueIds = order
         _currentIndex.value = index
+        pushQueue()
         pushPlayingState()
         refreshArtwork()
+    }
+
+    /**
+     * 把时间线顺序翻译成「给用户看的队列」。
+     *
+     * 随机播时这是洗过的顺序、倒序时是反过来的，所以不能直接拿 [_songs] 显示 ——
+     * 那样用户看到的下一首和真正会响的那首对不上。队里找不到的歌（曲库刚换过）跳过。
+     */
+    private fun pushQueue() {
+        val byId = _songs.value.associateBy { it.id }
+        _queue.value = queueIds.mapNotNull { byId[it] }
+        val index = playerRef?.currentMediaItemIndex ?: -1
+        _queuePosition.value = if (index in queueIds.indices) index else 0
+    }
+
+    private fun pushQueuePosition() {
+        val index = playerRef?.currentMediaItemIndex ?: return
+        _queuePosition.value = index.coerceIn(0, (queueIds.size - 1).coerceAtLeast(0))
+    }
+
+    /**
+     * 队列里点某一首：直接跳过去播。
+     *
+     * 传的是队列下标（也就是时间线下标），不是 [_songs] 的下标 ——
+     * 随机播时两者完全不同，混用会跳错歌。
+     */
+    fun playFromQueue(position: Int) {
+        ensureMainThread()
+        val player = playerRef ?: return
+        if (position !in queueIds.indices) return
+        stopPending = false
+        val targetId = queueIds[position]
+        val resume = if (position == (player.currentMediaItemIndex)) player.currentPosition else 0L
+        player.seekTo(position, resume)
+        startPlayback(player)
+        val songIndex = items.indexOfFirst { it.mediaId == targetId }
+        if (songIndex >= 0) _currentIndex.value = songIndex
+        pushQueuePosition()
+        pushPlayingState()
+        saveProgress()
+        refreshArtwork()
+    }
+
+    /**
+     * 拖动排序：把队列里的 [from] 挪到 [to]。
+     *
+     * 改的是播放列表本身（[_songs]）的顺序，然后按当前模式重排时间线，
+     * 再定位回「刚才在听的还是刚才在听的那首」。这样：
+     * - 顺序播下，你拖到前面的那首真的会下一首就响；
+     * - 随机播下，这一轮的时间线也按新顺序重建（不动 [_songs] 的话下次又乱）；
+     * - 正在播的那首不会被拖动打断，进度也不会跳。
+     */
+    fun moveInQueue(from: Int, to: Int) {
+        ensureMainThread()
+        val player = playerRef
+        val currentId = queueIds.getOrNull(player?.currentMediaItemIndex ?: -1)
+        val ordered = _queue.value
+        if (from !in ordered.indices || to !in ordered.indices || from == to) return
+        val moved = ordered.toMutableList()
+        moved.add(to, moved.removeAt(from))
+        // 队列里没出现的歌（曲库刚换过、正在加载）保持原样跟在后面，别被这条操作弄丢
+        val inQueue = moved.mapTo(HashSet()) { it.id }
+        val rest = _songs.value.filterNot { it.id in inQueue }
+        val songs = moved + rest
+        _songs.value = songs
+        items = songs.map { it.toMediaItem() }
+
+        if (player == null) {
+            rememberQueueOrder(songs)
+            return
+        }
+        val keepId = currentId ?: songs.firstOrNull()?.id ?: return
+        val keepSong = songs.firstOrNull { it.id == keepId }
+        val keepIndex = keepSong?.let { songs.indexOfFirst { s -> s.id == it.id } } ?: 0
+        // 正在播的那首如果正好被拖动了，进度得接着往下走，不能回 0
+        val position = if (player.currentMediaItemIndex >= 0) player.currentPosition else 0L
+        val wasPlaying = player.playWhenReady
+        applyQueue(player, keepIndex, position, play = wasPlaying)
+        // 队列顺序变了，但「上次听到哪」这条记录不该被改写
+        if (keepSong != null) Prefs.saveLastSongId(appContext ?: return, keepSong.id)
+    }
+
+    /** 没有播放器时（服务还没起来）也要记住新顺序，下次起播就是它。 */
+    private fun rememberQueueOrder(songs: List<Song>) {
+        appContext?.let { LibraryCache.save(it, songs) }
+        val keep = currentSong
+        if (keep != null) _currentIndex.value = songs.indexOfFirst { it.id == keep.id }.coerceAtLeast(0)
+        _queue.value = songs
+        _queuePosition.value = _currentIndex.value.coerceAtLeast(0)
     }
 
     /** 依据播放模式生成 mediaId 顺序；随机/倒序都以当前曲目打头，切换模式不跑偏。 */
@@ -876,6 +987,7 @@ object PlayerController {
             ?: return
         val index = items.indexOfFirst { it.mediaId == id }
         if (index >= 0) _currentIndex.value = index
+        pushQueuePosition()
         pushFavoriteLayout()
     }
 

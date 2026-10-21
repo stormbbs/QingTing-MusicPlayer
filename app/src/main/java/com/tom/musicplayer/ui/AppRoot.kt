@@ -92,6 +92,10 @@ fun AppRoot() {
     var returnToOnline by remember { mutableStateOf(false) }
     // 「我点心的歌曲」有三个入口（我的 / 我的歌单 / 曲库筛选），返回要回到进来的地方
     var favoritesBack by remember { mutableStateOf(AppScreen.PLAYLISTS) }
+    // 播放队列是从播放页点进去的，返回要回到播放页（而不是退到列表）
+    var queueOpen by remember { mutableStateOf(false) }
+    // 「我的」的下级页：返回时回「我的」，底栏继续保持「我的」高亮
+    var meSub by remember { mutableStateOf<AppScreen?>(null) }
 
     /**
      * 「我的音乐」列表 == 本地曲库，独立于播放队列。
@@ -111,6 +115,7 @@ fun AppRoot() {
     // 播放页的下载键要实时反映「正在下 / 下过了」，所以这两条流都得订阅
     val downloadKeys by Downloader.downloadedKeys.collectAsStateWithLifecycle()
     val downloadTasks by Downloader.tasks.collectAsStateWithLifecycle()
+    val songQueue by PlayerController.queue.collectAsStateWithLifecycle()
 
     val currentSong = songs.getOrNull(currentIndex)
 
@@ -245,6 +250,27 @@ fun AppRoot() {
         // 内容区占满除底栏外的空间：三个主页面都有底部导航，
         // 播放页浮层要盖住全部，所以放在最外层的 Box 里
         Box(modifier = Modifier.weight(1f)) {
+        // 「我的」可能还叠着一个下级页（数据管理）。下级页开着时底下的菜单页照样组合着，
+        // 返回只是把它关掉 —— 和列表进详情的体验一致，不用再记一次「上一页是哪个」
+        if (meSub != null) {
+            Box(modifier = Modifier.fillMaxSize()) {
+            MeScreen(
+                onOpenDownloads = { screen = AppScreen.DOWNLOADS },
+                onOpenFavorites = { favoritesBack = AppScreen.ME; screen = AppScreen.FAVORITES },
+                onOpenPlaylists = { screen = AppScreen.PLAYLISTS },
+                onOpenSources = {
+                    returnToOnline = false
+                    screen = AppScreen.ONLINE_SOURCES
+                },
+                onOpenBackup = { meSub = AppScreen.BACKUP }
+            )
+            when (meSub) {
+                AppScreen.BACKUP -> BackupScreen(onBack = { meSub = null })
+                else -> Unit
+            }
+            }
+            return@Box
+        }
         when (screen) {
             AppScreen.SOURCES -> SourcesScreen(
                 onBack = { screen = AppScreen.LIBRARY },
@@ -276,6 +302,10 @@ fun AppRoot() {
                 onOpenSources = {
                     returnToOnline = false
                     screen = AppScreen.ONLINE_SOURCES
+                },
+                onOpenBackup = {
+                    // 数据管理是「我的」的下级，选中态仍然停在「我的」
+                    meSub = AppScreen.BACKUP
                 }
             )
             AppScreen.DOWNLOADS -> DownloadsScreen(
@@ -363,13 +393,18 @@ fun AppRoot() {
                     scope.launch { withPlayer(context) { PlayerController.setMode(target) } }
                 }
             )
+            // 理论上走不到：meSub 已在上面的分支里处理掉了，这里只是让 when 保持穷尽
+            else -> Unit
         }
         }
 
         if (screen == AppScreen.LIBRARY || screen == AppScreen.ONLINE || screen == AppScreen.ME) {
             BottomNav(
                 current = screen,
-                onSelect = { target -> screen = target }
+                onSelect = { target ->
+                    screen = target
+                    meSub = null
+                }
             )
         }
         }
@@ -408,6 +443,8 @@ fun AppRoot() {
                         scope.launch { withPlayer(context) { PlayerController.setMode(target) } }
                     },
                     onToggleFavorite = { PlayerController.toggleFavorite(song) },
+                    onOpenQueue = { queueOpen = true },
+                    queueSize = songQueue.size,
                     downloadState = downloadState,
                     downloadProgress = busyTask?.progress ?: -1,
                     onDownload = {
@@ -428,6 +465,15 @@ fun AppRoot() {
                 )
             }
         }
+    }
+
+    // 播放队列铺在播放页上面：从播放页点进去、返回回到播放页，
+    // 而不是把播放页一起关掉（那样用户点一下队列就"退出"了正在听的这首）
+    if (queueOpen) {
+        QueueScreen(
+            onBack = { queueOpen = false },
+            onOpenPlayer = { queueOpen = false }
+        )
     }
 
     val currentLog = crashLog
@@ -453,7 +499,9 @@ fun AppRoot() {
         else -> Unit
     }
 
-    BackHandler(enabled = showPlayer) { showPlayer = false }
+    BackHandler(enabled = queueOpen) { queueOpen = false }
+
+    BackHandler(enabled = showPlayer && !queueOpen) { showPlayer = false }
 
     /**
      * 二级页面的系统返回（含全面屏左滑手势）。
@@ -465,6 +513,8 @@ fun AppRoot() {
      * 注意 enabled 要排除播放页：两个 handler 同为开启时后注册的赢，
      * 而手势发生在播放页盖上时应该先关播放页，不是退二级页。
      */
+    BackHandler(enabled = meSub != null && !showPlayer && !queueOpen) { meSub = null }
+
     val screenParent: AppScreen? = when (screen) {
         AppScreen.SOURCES -> AppScreen.LIBRARY
         AppScreen.DOWNLOADS -> AppScreen.ME
@@ -479,7 +529,7 @@ fun AppRoot() {
 }
 
 private enum class AppScreen {
-    LIBRARY, SOURCES, ONLINE, ME, DOWNLOADS, PLAYLISTS, FAVORITES, ONLINE_SOURCES
+    LIBRARY, SOURCES, ONLINE, ME, DOWNLOADS, PLAYLISTS, FAVORITES, ONLINE_SOURCES, BACKUP
 }
 
 /**

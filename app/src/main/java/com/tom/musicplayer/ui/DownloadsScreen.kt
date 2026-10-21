@@ -29,6 +29,9 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,7 +62,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tom.musicplayer.data.FavoritesStore
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.online.DownloadStore
+import com.tom.musicplayer.data.online.DownloadTask
 import com.tom.musicplayer.data.online.Downloader
+import com.tom.musicplayer.data.online.FailedDownload
+import com.tom.musicplayer.data.online.FailedDownloadStore
 import com.tom.musicplayer.model.Song
 import com.tom.musicplayer.player.PlayerController
 import com.tom.musicplayer.util.formatDuration
@@ -93,6 +99,9 @@ fun DownloadsScreen(
     var exporting by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var scanning by remember { mutableStateOf(false) }
+    // 下载失败的那几首：以前只在通知栏闪一下就没了，现在留在这里可以重试
+    var failures by remember(version) { mutableStateOf(FailedDownloadStore.load(context)) }
+    val downloadTasks by Downloader.tasks.collectAsStateWithLifecycle()
     // 下载页也要能点心：一首歌下下来了，顺手就能收进「我点心的歌曲」
     val favorites by PlayerController.favorites.collectAsStateWithLifecycle()
 
@@ -222,7 +231,42 @@ fun DownloadsScreen(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(10.dp))
+            if (failures.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                FailurePanel(
+                    failures = failures,
+                    tasks = downloadTasks,
+                    onRetry = { failed ->
+                        val started = Downloader.retry(context, failed)
+                        message = if (started) "重新下载：${failed.title}" else "这首歌已经在下载了"
+                    },
+                    onRetryAll = {
+                        val n = Downloader.retryAll(context, failures)
+                        message = if (n > 0) "开始重试 $n 首" else "没有可以重试的歌"
+                    },
+                    onRemove = { failed ->
+                        FailedDownloadStore.removeById(context, failed.id)
+                        failures = FailedDownloadStore.load(context)
+                    },
+                    onClear = {
+                        FailedDownloadStore.clear(context)
+                        failures = emptyList()
+                        message = "已清空失败记录"
+                    }
+                )
+            } else {
+                Spacer(modifier = Modifier.height(10.dp))
+                // 没有失败记录时也要留一个位置：否则用户不知道失败会被记下来
+                if (items.isNotEmpty()) {
+                    runningTasks(downloadTasks)?.let { running ->
+                        Text(
+                            text = running,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
             if (items.isEmpty()) {
                 Column(
@@ -382,4 +426,120 @@ private fun formatBytes(bytes: Long): String {
     if (bytes <= 0) return ""
     val mb = bytes / 1024.0 / 1024.0
     return if (mb >= 1) "%.1f MB".format(mb) else "%d KB".format(bytes / 1024)
+}
+
+/** 「正在下载 2 首」这类一句话进度；没有在跑的返回 null。 */
+private fun runningTasks(tasks: List<DownloadTask>): String? {
+    val active = tasks.filter { !it.done && it.error == null }
+    if (active.isEmpty()) return null
+    return if (active.size == 1) "正在下载：${active.first().title}"
+    else "正在下载 ${active.size} 首"
+}
+
+/**
+ * 下载失败面板。
+ *
+ * 三个操作刚好对应三种心情：「再试一次」（可能是网络抖了一下）、
+ * 「全部重试」（一次下了好几首，早上醒来发现全挂了）、「清掉」（不想再看到它）。
+ * 失败原因原样显示 —— 「服务器返回 403」和「音源已被删除」要分开对待，
+ * 后者重试一百次也没用。
+ */
+@Composable
+private fun FailurePanel(
+    failures: List<FailedDownload>,
+    tasks: List<DownloadTask>,
+    onRetry: (FailedDownload) -> Unit,
+    onRetryAll: () -> Unit,
+    onRemove: (FailedDownload) -> Unit,
+    onClear: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.WarningAmber,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("没下成的 ${failures.size} 首", fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onClear) { Text("清空") }
+                if (failures.size > 1) {
+                    TextButton(onClick = onRetryAll) { Text("全部重试") }
+                }
+            }
+            failures.take(8).forEach { failed ->
+                val busy = tasks.any {
+                    it.key == "${failed.sourceId}:${failed.songId}" && !it.done && it.error == null
+                }
+                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = failed.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = listOf(failed.artist, failed.reason)
+                                    .filter { it.isNotBlank() }.joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (busy) {
+                            // 重试已排上队：这里显示进度，免得用户以为没反应又点一次
+                            Text(
+                                text = "重试中",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            IconButton(onClick = { onRetry(failed) }, modifier = Modifier.size(36.dp)) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "重试",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        IconButton(onClick = { onRemove(failed) }, modifier = Modifier.size(36.dp)) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "不再提示",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    // 音源被删了的歌，重试必然再失败一次，先把话说在前面
+                    if (failed.reason.contains("音源")) {
+                        Text(
+                            text = "音源可能已经被删掉或禁用了，先去「在线音源」里检查一下",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+            if (failures.size > 8) {
+                Text(
+                    text = "还有 ${failures.size - 8} 首没显示，先点「全部重试」试试",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
 }

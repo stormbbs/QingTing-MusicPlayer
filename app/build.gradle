@@ -20,8 +20,8 @@ android {
         applicationId 'com.tom.musicplayer'
         minSdk 26
         targetSdk 35
-        versionCode 13
-        versionName '2.0.1-1021'
+        versionCode 14
+        versionName '2.1.0-1021'
 
         // 保留这个字段只是为了不让老代码 import 报错，值恒为空。
         buildConfigField 'String', 'LINGLAN_KEY', '""'

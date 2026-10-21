@@ -207,6 +207,26 @@ object FavoritesStore {
         persist(context, data)
     }
 
+    /**
+     * 直接写入一条完整的收藏记录（导入备份用）。
+     *
+     * 和 [put] 的区别：这里不重新算 key、也不猜音源身份 —— 备份里的记录
+     * 本来就是从这个结构序列化出去的，原样放回来最不容易出错。
+     */
+    @Synchronized
+    fun putEntry(context: Context, entry: FavoriteSong) {
+        val data = list(context)
+        val index = data.indexOfFirst { it.id == entry.id }
+        if (index >= 0) data[index] = entry else data.add(entry)
+        persist(context, data)
+    }
+
+    /** 清空收藏（「重置」用）。 */
+    @Synchronized
+    fun clear(context: Context) {
+        persist(context, emptyList())
+    }
+
     @Synchronized
     fun remove(context: Context, keys: Collection<String>) {
         val data = list(context)

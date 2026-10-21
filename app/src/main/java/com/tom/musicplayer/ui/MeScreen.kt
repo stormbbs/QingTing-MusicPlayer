@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -58,6 +59,7 @@ fun MeScreen(
     onOpenFavorites: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onOpenSources: () -> Unit,
+    onOpenBackup: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -118,6 +120,15 @@ fun MeScreen(
                 title = "在线音源",
                 subtitle = if (sourceCount > 0) "$sourceCount 个音源已启用" else "还没有添加音源",
                 onClick = onOpenSources
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+            // 收藏和歌单都是用户自己攒出来的，卸载 / 换机就没了，所以给个显眼的备份入口
+            EntryCard(
+                icon = { Icon(Icons.Default.Save, contentDescription = null) },
+                title = "数据管理",
+                subtitle = "导出 / 导入收藏、歌单和音源配置",
+                onClick = onOpenBackup
             )
 
             Spacer(modifier = Modifier.height(22.dp))

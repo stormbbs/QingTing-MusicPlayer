@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -112,7 +113,11 @@ fun PlayerScreen(
     downloadState: NotificationActions.DownloadState? = null,
     /** 下载进度 0..100，未知大小时为 -1。 */
     downloadProgress: Int = -1,
-    onDownload: () -> Unit = {}
+    onDownload: () -> Unit = {},
+    /** 打开播放队列：看后面还有哪些歌、调顺序。 */
+    onOpenQueue: () -> Unit = {},
+    /** 队列里还剩几首（含正在播的这首），0 表示不知道 / 空。 */
+    queueSize: Int = 0
 ) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
@@ -184,6 +189,33 @@ fun PlayerScreen(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f)
                 )
+                // 播放队列：放在收藏左边，播放中随时能看「后面还有什么、把这首提上来」
+                Box {
+                    IconButton(onClick = onOpenQueue) {
+                        Icon(
+                            Icons.Default.QueueMusic,
+                            contentDescription = "播放队列",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // 队列长度标在图标角上：不点进去也知道后面还剩几首
+                    if (queueSize > 0) {
+                        Text(
+                            text = if (queueSize > 99) "99+" else "$queueSize",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 6.dp, end = 2.dp)
+                                .background(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    shape = CircleShape
+                                )
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
                 // 听得顺手就收藏：放在标题栏右侧，拇指不用去找列表里的那颗心形
                 IconButton(onClick = onToggleFavorite) {
                     Icon(

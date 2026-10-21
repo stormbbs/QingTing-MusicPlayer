@@ -1,10 +1,10 @@
 {
-  "versionCode": 13,
-  "versionName": "2.0.1-1021",
-  "url": "https://github.com/stormbbs/QingTing-MusicPlayer/releases/download/v2.0.1/qingting-2.0.1-1021.apk",
+  "versionCode": 14,
+  "versionName": "2.1.0-1021",
+  "url": "https://github.com/stormbbs/QingTing-MusicPlayer/releases/download/v2.1.0/qingting-2.1.0-1021.apk",
   "mirrorUrl": "",
   "size": 21178806,
   "sha256": "aa8a9e909348467d36ddf973a71a098c32b166836d0137f1634c59b266ee03ae",
-  "notes": "修复：我的下载 / 歌单 / 点心 / 音源管理等二级页面，按系统返回（含全面屏左滑手势）不再直接退出 App，改为回到上一级页面（我的下载回到「我的」，以此类推）。",
+  "notes": "新功能：① 下载失败自动记录，「我的下载」里可单首重试、全部重试，成功后自动清记录；② 播放页新增播放队列，可查看（含随机播实际顺序）并上下移调整顺序、点任意一首跳播；③ 「我的 → 数据管理」支持把收藏、自建歌单、音源配置导出为文件备份，换手机/重装后可导入合并。",
   "mandatory": false
 }

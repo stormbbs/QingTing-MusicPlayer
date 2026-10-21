@@ -97,6 +97,34 @@ object Downloader {
         return "$sourceId:$songId"
     }
 
+    /**
+     * 重下一条失败记录。
+     *
+     * 走的是和正常下载一样的路径，成功后会顺手把那条失败记录删掉 ——
+     * 留着一条「已经下好了」的失败提醒只会让人以为又出问题了。
+     *
+     * @return 真的开始了返回 true；音源已经没了、或者这首歌已经在下载中返回 false
+     */
+    fun retry(context: Context, failed: FailedDownload): Boolean {
+        val app = context.applicationContext
+        val online = failed.toOnlineSong()
+        if (isDownloading(online)) return false
+        _tasks.value = _tasks.value.filterNot {
+            it.key == taskKey(online) && (it.done || it.error != null)
+        }
+        scope.launch {
+            val result = runCatching { download(app, online, failed.quality) }.getOrNull()
+            if (result?.isSuccess == true) {
+                FailedDownloadStore.remove(app, failed.sourceId, failed.songId)
+            }
+        }
+        return true
+    }
+
+    /** 批量重试，返回真正排上队的首数（音源被删的会被跳过）。 */
+    fun retryAll(context: Context, items: List<FailedDownload>): Int =
+        items.count { retry(context, it) }
+
     /** 重算「已下载」集合。增删改之后调一次，界面靠这个流刷新。 */
     fun refreshDownloadedKeys(context: Context) {
         _downloadedKeys.value = DownloadStore.load(context)
@@ -186,6 +214,8 @@ object Downloader {
                     finishedAt = System.currentTimeMillis()
                 )
                 DownloadStore.add(context, record)
+                // 之前失败过、这次成功了：失败记录留着只会让人以为又出问题了
+                FailedDownloadStore.remove(context, song.sourceId, song.songId)
                 // 播放页/通知栏的按钮要靠这个集合切成「已下载」
                 refreshDownloadedKeys(context)
 
@@ -197,6 +227,25 @@ object Downloader {
                 val msg = e.message ?: "下载失败"
                 upsert(DownloadTask(key, song.name, song.artist, 0, error = msg))
                 notify.failed(song.name, msg)
+                // 失败也要落一条账：通知一划掉就再也找不到是哪首没下来，
+                // 更没法重试。「我的下载」页把这几条列出来，点一下就能重下。
+                runCatching {
+                    FailedDownloadStore.record(
+                        context,
+                        FailedDownload(
+                            id = UUID.randomUUID().toString(),
+                            sourceId = song.sourceId,
+                            songId = song.songId,
+                            title = song.name,
+                            artist = song.artist,
+                            album = song.album,
+                            durationMs = song.durationMs,
+                            cover = song.cover,
+                            quality = quality,
+                            reason = msg
+                        )
+                    )
+                }
                 Result.failure(Exception(msg))
             }
         }

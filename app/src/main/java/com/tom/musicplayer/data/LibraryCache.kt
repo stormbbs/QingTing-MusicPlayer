@@ -38,6 +38,11 @@ object LibraryCache {
                     song.remotePath?.let { put("remote", it) }
                     song.lyricUri?.let { put("lyric", it.toString()) }
                     put("size", song.sizeBytes)
+                    // 在线歌也要能缓存：队列里混着在线歌时（例如从榜单起播），
+                    // 少了这几项重启后会被当成「没有地址的本地歌」
+                    put("sourceId", song.onlineSourceId ?: "")
+                    put("songId", song.onlineSongId ?: "")
+                    put("cover", song.coverUrl ?: "")
                 }
             )
         }
@@ -75,7 +80,10 @@ object LibraryCache {
                         remotePath = o.optString("remote").takeIf { it.isNotBlank() },
                         sizeBytes = o.optLong("size", 0L),
                         lyricUri = o.optString("lyric").takeIf { it.isNotBlank() }
-                            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                            ?.let { runCatching { Uri.parse(it) }.getOrNull() },
+                        onlineSourceId = o.optString("sourceId").takeIf { it.isNotBlank() },
+                        onlineSongId = o.optString("songId").takeIf { it.isNotBlank() },
+                        coverUrl = o.optString("cover").takeIf { it.isNotBlank() }
                     )
                 )
             }
