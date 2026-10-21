@@ -454,6 +454,28 @@ fun AppRoot() {
     }
 
     BackHandler(enabled = showPlayer) { showPlayer = false }
+
+    /**
+     * 二级页面的系统返回（含全面屏左滑手势）。
+     *
+     * 以前只有播放页和在线详情接了返回，其余二级页（我的下载 / 歌单 / 点心 /
+     * 音源管理 / WebDAV）系统返回会直接退出 App——用户左滑的预期明明是回到上一级。
+     * 这里统一接一次：每个二级页声明自己的父页面，返回键走和左上角箭头一样的路径。
+     *
+     * 注意 enabled 要排除播放页：两个 handler 同为开启时后注册的赢，
+     * 而手势发生在播放页盖上时应该先关播放页，不是退二级页。
+     */
+    val screenParent: AppScreen? = when (screen) {
+        AppScreen.SOURCES -> AppScreen.LIBRARY
+        AppScreen.DOWNLOADS -> AppScreen.ME
+        AppScreen.PLAYLISTS -> AppScreen.ME
+        AppScreen.FAVORITES -> favoritesBack
+        AppScreen.ONLINE_SOURCES -> if (returnToOnline) AppScreen.ONLINE else AppScreen.ME
+        else -> null
+    }
+    BackHandler(enabled = !showPlayer && screenParent != null) {
+        screenParent?.let { screen = it }
+    }
 }
 
 private enum class AppScreen {
