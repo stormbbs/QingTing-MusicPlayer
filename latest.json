@@ -3,8 +3,8 @@
   "versionName": "2.1.0-1021",
   "url": "https://github.com/stormbbs/QingTing-MusicPlayer/releases/download/v2.1.0/qingting-2.1.0-1021.apk",
   "mirrorUrl": "",
-  "size": 21178806,
-  "sha256": "aa8a9e909348467d36ddf973a71a098c32b166836d0137f1634c59b266ee03ae",
+  "size": 14401152,
+  "sha256": "0fd6fb003eef4fe816a2f971c3553ab521b10d03ec4dcac1510d550745f44bdd",
   "notes": "新功能：① 下载失败自动记录，「我的下载」里可单首重试、全部重试，成功后自动清记录；② 播放页新增播放队列，可查看（含随机播实际顺序）并上下移调整顺序、点任意一首跳播；③ 「我的 → 数据管理」支持把收藏、自建歌单、音源配置导出为文件备份，换手机/重装后可导入合并。",
   "mandatory": false
 }
