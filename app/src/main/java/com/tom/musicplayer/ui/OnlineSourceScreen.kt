@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tom.musicplayer.data.online.OnlineApi
 import com.tom.musicplayer.data.online.OnlineSourceStore
+import com.tom.musicplayer.model.BuiltinProvider
 import com.tom.musicplayer.model.OnlineSource
 import kotlinx.coroutines.launch
 
@@ -75,6 +76,7 @@ fun OnlineSourceScreen(
     val sources = remember(version) { OnlineSourceStore.load(context) }
     var editing by remember { mutableStateOf<OnlineSource?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var addingBuiltin by remember { mutableStateOf<BuiltinProvider?>(null) }
     var picking by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
@@ -105,7 +107,7 @@ fun OnlineSourceScreen(
                 }
             }
             Text(
-                text = "内置源开箱即用，填一次密钥就能播；也可以再加任何符合协议的第三方音源。",
+                text = "内置引擎开箱即用，但要自己填一把音源密钥才能播放；也可以再加任何符合协议的第三方音源。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -181,17 +183,18 @@ fun OnlineSourceScreen(
             text = {
                 Column {
                     Text(
-                        text = "内置平台开箱即用，不用架服务；也可以接入任何符合协议的第三方音源。",
+                        text = "内置平台开箱即用，不用架服务，但要自己填一把音源密钥才能播放；" +
+                            "也可以接入任何符合协议的第三方音源。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     missing.forEach { p ->
-                        PickRow(p.displayName, p.description) {
-                            OnlineSourceStore.restoreBuiltin(context, p)
-                            version++
+                        PickRow(p.displayName, "内置引擎 · 需填自己的音源密钥") {
+                            // 不再「点一下就加进列表」：先弹密钥对话框，填完才算装上。
+                            // 否则列表里会留一个能搜不能播的空壳，用户还以为是坏了。
                             picking = false
-                            toast = "已添加「${p.displayName}」，点「设置」可填密钥"
+                            addingBuiltin = p
                         }
                     }
                     PickRow("自定义协议音源", "填一个符合在线音源协议的服务地址") {
@@ -215,6 +218,22 @@ fun OnlineSourceScreen(
                 version++
                 creating = false
                 editing = null
+            }
+        )
+    }
+
+    addingBuiltin?.let { p ->
+        BuiltinKeyDialog(
+            provider = p,
+            onDismiss = { addingBuiltin = null },
+            onSave = { key ->
+                OnlineSourceStore.upsert(
+                    context,
+                    OnlineSourceStore.defaultBuiltin(p).copy(apiKey = key)
+                )
+                version++
+                addingBuiltin = null
+                toast = "已添加「${p.displayName}」"
             }
         )
     }
@@ -404,14 +423,14 @@ private fun SourceEditDialog(
                 if (builtin) {
                     Text(
                         text = "搜索、榜单、歌词由 App 内置引擎直接提供，不用填服务地址。" +
-                            "播放要解析直链，所以需要一个密钥。",
+                            "播放要解析直链，所以需要你自己的音源密钥——App 不再预置密钥。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Field("显示名", name, { name = it }, source?.name.orEmpty())
                     Field("音源密钥", apiKey, { apiKey = it; error = null }, "CERU_KEY-...")
                     Text(
-                        text = "没填也能搜索和浏览，只是点播放会提示缺密钥。",
+                        text = "密钥只存这台设备本地，不会上传。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)
@@ -436,8 +455,8 @@ private fun SourceEditDialog(
         confirmButton = {
             TextButton(onClick = {
                 val current = source
-                if (builtin && current != null) {
-                    onSave(
+                if (builtin) {
+                    if (current != null) onSave(
                         current.copy(
                             name = name.trim().ifBlank { current.name },
                             apiKey = apiKey.trim()
@@ -466,6 +485,41 @@ private fun SourceEditDialog(
                     )
                 )
             }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+/** 添加内置平台时先要一把密钥：没有密钥的源既不能播、也没必要占着列表。 */
+@Composable
+private fun BuiltinKeyDialog(
+    provider: BuiltinProvider,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var key by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加「${provider.displayName}」") },
+        text = {
+            Column {
+                Text(
+                    text = "搜索、榜单、歌词由 App 内置引擎直接提供，不用填服务地址。" +
+                        "播放要解析直链，所以需要你自己的音源密钥——App 已不再内置任何密钥。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Field("音源密钥", key, { key = it }, "CERU_KEY-...")
+                Text(
+                    text = "密钥只存这台设备本地，不会上传。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = key.isNotBlank(), onClick = { onSave(key.trim()) }) { Text("添加") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )

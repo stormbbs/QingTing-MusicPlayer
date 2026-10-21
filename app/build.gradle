@@ -5,23 +5,13 @@ plugins {
 }
 
 /**
- * 内置音源（酷我 / 网易云）解析直链要用的密钥。
+ * 内置音源（酷我 / 网易云）解析直链要用的密钥，**不再随构建注入**。
  *
- * 不写死在代码里，是因为这个密钥是永久授权，一旦进仓库等于公开。
- * 改成从 local.properties 读——那个文件已被 .gitignore 忽略，
- * 你自己在本地填一次，构建出来的 APK 就自带密钥；别人 clone 下来是空的，
- * 得自己在 App 的「音源管理」里填。
- *
- *   # local.properties
- *   LINGLAN_KEY=CERU_KEY-xxxx
+ * 曾经的 LINGLAN_KEY 走 local.properties，虽然没进仓库，但打出来的 APK 里带着
+ * 一把永久有效的密钥，等于谁装了这个包谁都能白嫖。现在改成纯手动：
+ * 装好 App 后到「我的 → 在线音源 → 酷我/网易云 → 设置 → 音源密钥」填一次，
+ * 存在设备本地（shared_prefs），只在那台手机上有效。
  */
-def localProps = new Properties()
-def localPropsFile = rootProject.file('local.properties')
-if (localPropsFile.exists()) {
-    localPropsFile.withInputStream { localProps.load(it) }
-}
-def linglanKey = localProps.getProperty('LINGLAN_KEY', '') ?: ''
-
 android {
     namespace 'com.tom.musicplayer'
     compileSdk 35
@@ -30,10 +20,11 @@ android {
         applicationId 'com.tom.musicplayer'
         minSdk 26
         targetSdk 35
-        versionCode 11
-        versionName '1.9.1-1021'
+        versionCode 12
+        versionName '2.0-1021'
 
-        buildConfigField 'String', 'LINGLAN_KEY', "\"${linglanKey}\""
+        // 保留这个字段只是为了不让老代码 import 报错，值恒为空。
+        buildConfigField 'String', 'LINGLAN_KEY', '""'
     }
 
     buildTypes {

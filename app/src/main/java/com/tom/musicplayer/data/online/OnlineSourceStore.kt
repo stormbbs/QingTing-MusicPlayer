@@ -1,7 +1,6 @@
 package com.tom.musicplayer.data.online
 
 import android.content.Context
-import com.tom.musicplayer.BuildConfig
 import com.tom.musicplayer.model.BuiltinProvider
 import com.tom.musicplayer.model.OnlineSource
 import org.json.JSONArray
@@ -15,27 +14,31 @@ import java.util.UUID
  * 除了常规增删改，还负责**导入 / 导出**：音源配置是一份普通 JSON，
  * 可以从文件、剪贴板文本、甚至一个 URL 导入——这样换手机、换音源都不用一个个手填。
  *
- * 另外负责**内置源的首次植入**：App 装好第一次打开，「酷我」「网易云」两个内置源
- * 就已经在列表里了，开箱能搜。用户删掉之后不会自动加回来（尊重用户选择），
- * 想恢复从「添加音源 → 内置平台」里点一下即可。
+ * 关于内置源（酷我 / 网易云）：它们的能力是 App 自带的引擎，但**不带任何预置密钥**。
+ * 用户必须自己填一次密钥，填完才算真正「装上」这个源——所以内置源不会默认出现在列表里，
+ * 而是走「添加音源」入口、填完密钥后才落到配置中。这样打出来的 APK 谁拿到都得自备密钥，
+ * 不会出现「装了包就能白嫖」的情况。
  */
 object OnlineSourceStore {
 
     private const val FILE = "online_sources.json"
     private const val PREFS = "online_source_prefs"
+    /** 旧版本用它做过「首次植入内置源」的一次性标记，现在只用来做迁移判断。 */
     private const val KEY_SEEDED = "builtin_seeded_v1"
+    /** 已经清理过历史内置源里残留预置密钥的标记。 */
+    private const val KEY_KEY_STRIPPED = "builtin_key_stripped_v1"
 
     @Volatile
     private var memory: List<OnlineSource>? = null
 
     private fun file(context: Context) = File(context.filesDir, FILE)
 
-    /** 内置源的默认配置。密钥优先用构建时注入的，没有就留空让用户自己填。 */
+    /** 内置源的空白配置：没有密钥，密钥由用户在「设置」里自己填。 */
     fun defaultBuiltin(provider: BuiltinProvider): OnlineSource = OnlineSource(
         id = "builtin.${provider.key}",
         name = provider.displayName,
         provider = provider.key,
-        apiKey = BuildConfig.LINGLAN_KEY,
+        apiKey = "",
         enabled = true
     )
 
@@ -55,20 +58,27 @@ object OnlineSourceStore {
             }.getOrDefault(emptyList())
         }
 
-        // 首次安装：把内置源直接摆进列表
+        // 迁移：老版本首次安装会把内置源连同预置密钥一起塞进列表，那批密钥是打包时注入的。
+        // 这里一次性把它们清空，让用户重新填自己的——清空后列表长度不变，所以不需要通知 UI。
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val migrated = if (prefs.getBoolean(KEY_KEY_STRIPPED, false)) {
+            list
+        } else {
+            prefs.edit().putBoolean(KEY_KEY_STRIPPED, true).apply()
+            list.map {
+                if (it.isBuiltin && it.apiKey.isNotBlank()) it.copy(apiKey = "") else it
+            }
+        }
+        if (migrated !== list) write(context, migrated)
+
+        // 老的「首次植入」标记要补上，否则从 1.x 升上来的用户下次进音源管理
+        // 会被当成全新安装、又给塞一遍内置源。
         if (!prefs.getBoolean(KEY_SEEDED, false)) {
-            val seeded = list + BuiltinProvider.entries
-                .filter { p -> list.none { it.provider == p.key } }
-                .map { defaultBuiltin(it) }
-            memory = seeded
-            write(context, seeded)
             prefs.edit().putBoolean(KEY_SEEDED, true).apply()
-            return seeded
         }
 
-        memory = list
-        return list
+        memory = migrated
+        return migrated
     }
 
     fun enabled(context: Context): List<OnlineSource> = load(context).filter { it.enabled }
