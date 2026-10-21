@@ -1,5 +1,6 @@
 package com.tom.musicplayer.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -112,6 +114,8 @@ private fun <T> List<List<T>>.interleave(): List<T> {
 fun OnlineScreen(
     onPlaySongs: (List<Song>, Int) -> Unit,
     onOpenSources: () -> Unit,
+    /** 播放页浮层正盖在在线页上：这时返回键该关播放页，不能拿来退榜单。 */
+    playerOpen: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -134,15 +138,18 @@ fun OnlineScreen(
         keyboard?.hide()
     }
 
-    var query by remember { mutableStateOf("") }
+    // 搜索 / 榜单 / 详情这些都存在 OnlineUi 里：切到别的底栏再回来，还是刚才那一页，
+    // 不会又退回一个空搜索框（用户没有「退出搜索」的意思，只是去看了首歌）
+    var query by remember { OnlineUi.query }
     var quality by remember { mutableStateOf(Prefs.getQuality(context)) }
-    var results by remember { mutableStateOf<List<OnlineSong>>(emptyList()) }
-    var playlists by remember { mutableStateOf<List<OnlinePlaylist>>(emptyList()) }
+    var results by remember { OnlineUi.results }
+    var playlists by remember { OnlineUi.playlists }
     var loading by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-    var tab by remember { mutableIntStateOf(0) }
+    var message by remember { OnlineUi.message }
+    var tab by remember { OnlineUi.tab }
     // 歌单详情：名字 + 曲目
-    var detail by remember { mutableStateOf<Pair<String, List<OnlineSong>>?>(null) }
+    var detail by remember { OnlineUi.detail }
+    var playlistsLoaded by remember { OnlineUi.playlistsLoaded }
     var addTarget by remember { mutableStateOf<OnlineSong?>(null) }
     var importOpen by remember { mutableStateOf(false) }
 
@@ -174,6 +181,8 @@ fun OnlineScreen(
             }
             results = merged
             loading = false
+            // 新的一批结果从顶部看起，别沿用上一次搜索的滚动位置
+            runCatching { OnlineUi.resultsScroll.scrollToItem(0) }
             if (merged.isEmpty()) message = "没有找到「$keyword」，换个关键词或换音源试试"
         }
     }
@@ -191,6 +200,7 @@ fun OnlineScreen(
                 }.map { it.await() }.interleave()
             }
             playlists = merged
+            playlistsLoaded = true
             loading = false
             if (merged.isEmpty()) message = "这个音源没有提供榜单或歌单"
         }
@@ -213,13 +223,21 @@ fun OnlineScreen(
             }
             loading = false
             if (pair == null) message = "打不开这个歌单"
-            else detail = pair
+            else {
+                detail = pair
+                // 换了一个榜单就从第一首看起
+                runCatching { OnlineUi.detailScroll.scrollToItem(0) }
+            }
         }
     }
 
     LaunchedEffect(sourceVersion) {
-        if (sources.isNotEmpty() && playlists.isEmpty()) loadPlaylists()
+        if (sources.isNotEmpty() && !playlistsLoaded) loadPlaylists()
     }
+
+    // 在榜单详情里按系统返回，应该退回榜单列表，而不是一脚退出 App。
+    // 播放页盖在上面时让路：那一层有自己的返回处理
+    BackHandler(enabled = detail != null && !playerOpen) { detail = null }
 
     Scaffold(
         modifier = modifier,
@@ -251,7 +269,7 @@ fun OnlineScreen(
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = "搜索") },
                 trailingIcon = {
                     if (query.isNotBlank()) {
-                        IconButton(onClick = { query = ""; results = emptyList() }) {
+                        IconButton(onClick = { query = ""; OnlineUi.clearResults() }) {
                             Icon(Icons.Default.Close, contentDescription = "清空")
                         }
                     }
@@ -293,7 +311,7 @@ fun OnlineScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 TabChip(text = "榜单歌单", selected = tab == 1) {
                     tab = 1
-                    if (playlists.isEmpty()) loadPlaylists()
+                    if (!playlistsLoaded) loadPlaylists()
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -325,6 +343,7 @@ fun OnlineScreen(
                             }
                             SongResultList(
                                 songs = list,
+                                scrollState = OnlineUi.detailScroll,
                                 onPlay = { i -> play(list, i) },
                                 onDownload = { song ->
                                     dismissKeyboard()
@@ -340,7 +359,10 @@ fun OnlineScreen(
                         if (playlists.isEmpty() && message != null) {
                             HintText(text = message!!, modifier = Modifier.align(Alignment.Center))
                         } else {
-                            LazyColumn(contentPadding = PaddingValues(bottom = 12.dp)) {
+                            LazyColumn(
+                                state = OnlineUi.chartsScroll,
+                                contentPadding = PaddingValues(bottom = 12.dp)
+                            ) {
                                 itemsIndexed(playlists, key = { _, p -> p.sourceId + p.id }) { _, p ->
                                     PlaylistRow(playlist = p, onClick = { openPlaylist(p) })
                                 }
@@ -355,6 +377,7 @@ fun OnlineScreen(
                     }
                     else -> SongResultList(
                         songs = results,
+                        scrollState = OnlineUi.resultsScroll,
                         onPlay = { i -> play(results, i) },
                         onDownload = { song ->
                             dismissKeyboard()
@@ -454,13 +477,14 @@ private fun NoSourceHint(onOpenSources: () -> Unit) {
 @Composable
 private fun SongResultList(
     songs: List<OnlineSong>,
+    scrollState: LazyListState,
     onPlay: (Int) -> Unit,
     onDownload: (OnlineSong) -> Unit,
     onAdd: (OnlineSong) -> Unit,
     favorites: Set<String>,
     onToggleFavorite: (OnlineSong) -> Unit
 ) {
-    LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(state = scrollState, contentPadding = PaddingValues(bottom = 16.dp)) {
         itemsIndexed(songs, key = { _, s -> s.globalId }) { index, song ->
             Row(
                 modifier = Modifier

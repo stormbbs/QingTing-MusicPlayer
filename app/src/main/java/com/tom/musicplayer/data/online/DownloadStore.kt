@@ -64,13 +64,62 @@ object DownloadStore {
     @Volatile
     private var memory: List<DownloadedSong>? = null
 
+    /**
+     * 文件名 → 下载记录。用来把「曲库里扫到的那个文件」认回「它本来是音源里的哪首歌」。
+     *
+     * 没有这张表时，同一首歌会有两副互不认识的身份：在线版是 `online:音源:歌曲`，
+     * 下载到本地再被扫描进来就是文件 Uri。于是两侧各自点心、各自计数，
+     * 明明是一首歌却要收藏两遍 —— 用户看到的就是「我的音乐和在线各玩各的」。
+     */
+    @Volatile
+    private var nameIndex: Map<String, List<DownloadedSong>> = emptyMap()
+
     private fun file(context: Context) = File(context.filesDir, FILE)
+
+    private fun rebuildIndex(list: List<DownloadedSong>) {
+        val map = HashMap<String, MutableList<DownloadedSong>>()
+        list.forEach { d ->
+            if (d.sourceId.isNullOrBlank() || d.songId.isNullOrBlank()) return@forEach
+            namesOf(d).forEach { name ->
+                map.getOrPut(name.lowercase()) { ArrayList(1) }.add(d)
+            }
+        }
+        nameIndex = map
+    }
+
+    /** 一条下载记录可能被记成几种不同的名字，每个都当索引用。 */
+    private fun namesOf(d: DownloadedSong): List<String> = listOfNotNull(
+        d.displayName?.takeIf { it.isNotBlank() },
+        d.location?.substringAfterLast('/')?.takeIf { it.isNotBlank() },
+        d.legacyPath?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+    ).distinct()
+
+    /**
+     * 按文件名找回音源身份。曲库扫描不会带音源信息，只能靠这个反查。
+     *
+     * 同名文件可能不止一条记录（不同音源下过同一首），所以先按大小挑，挑不出就取第一条：
+     * 宁可把同名同大小的两首当成一首，也不要让同一首歌在收藏里裂成两条。
+     */
+    fun identityOf(fileName: String?, sizeBytes: Long = 0L): Pair<String, String>? {
+        if (fileName.isNullOrBlank()) return null
+        val candidates = nameIndex[fileName.lowercase()] ?: return null
+        val hit = candidates.firstOrNull {
+            sizeBytes <= 0L || it.sizeBytes <= 0L || it.sizeBytes == sizeBytes
+        } ?: candidates.firstOrNull()
+        val sourceId = hit?.sourceId
+        val songId = hit?.songId
+        return if (!sourceId.isNullOrBlank() && !songId.isNullOrBlank()) sourceId to songId else null
+    }
 
     @Synchronized
     fun load(context: Context): List<DownloadedSong> {
         memory?.let { return it }
-        val text = runCatching { file(context).readText() }.getOrNull() ?: return emptyList()
-        if (text.isBlank()) return emptyList()
+        val text = runCatching { file(context).readText() }.getOrNull()
+        if (text.isNullOrBlank()) {
+            memory = emptyList()
+            rebuildIndex(emptyList())
+            return emptyList()
+        }
         val list = runCatching {
             val array = JSONArray(text)
             val out = ArrayList<DownloadedSong>(array.length())
@@ -106,12 +155,14 @@ object DownloadStore {
             out
         }.getOrDefault(emptyList())
         memory = list
+        rebuildIndex(list)
         return list
     }
 
     @Synchronized
     private fun save(context: Context, list: List<DownloadedSong>) {
         memory = list
+        rebuildIndex(list)
         val array = JSONArray()
         list.forEach { d ->
             array.put(JSONObject().apply {

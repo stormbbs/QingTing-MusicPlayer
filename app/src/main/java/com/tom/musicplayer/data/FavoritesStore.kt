@@ -2,6 +2,7 @@ package com.tom.musicplayer.data
 
 import android.content.Context
 import android.net.Uri
+import com.tom.musicplayer.data.online.DownloadStore
 import com.tom.musicplayer.model.Song
 import com.tom.musicplayer.model.SourceKind
 import org.json.JSONArray
@@ -105,32 +106,48 @@ object FavoritesStore {
      * 规范 key。
      *
      * 同一首歌可能有两副面孔：音源里的那一版，和下载到本地的那一版。
-     * 二者的 song.id 不一样（下载版是下载记录自己的 uuid），如果按 id 记，
-     * 点过心的歌下载完就会在歌单里出现两条，取消一条另一条还在。
-     * 有音源身份时就以音源身份为准，两副面孔合成一条。
+     * 二者的 song.id 不一样（下载版是下载记录自己的 uuid，扫描进来的是文件 Uri），
+     * 如果各按各的 id 记，点过心的歌下载完就会在歌单里出现两条，取消一条另一条还在。
+     *
+     * 所以有音源身份时以音源身份为准。曲库扫描出来的文件不携带音源信息，
+     * 这里再用文件名反查一次下载记录（见 [DownloadStore.identityOf]）——
+     * 下过的歌已经从音源「落到」文件夹里，它仍然是同一首，收藏不该分成两套。
      */
-    fun keyOf(song: Song): String =
-        keyOf(song.onlineSourceId, song.onlineSongId, song.id)
+    fun keyOf(song: Song): String {
+        if (song.kind == SourceKind.LOCAL) {
+            DownloadStore.identityOf(song.fileName, song.sizeBytes)?.let { (sourceId, songId) ->
+                return keyOf(sourceId, songId, song.id)
+            }
+        }
+        return keyOf(song.onlineSourceId, song.onlineSongId, song.id)
+    }
 
     /** 同上，给只有身份信息、还没拼成 [Song] 的地方用（例如下载记录）。 */
     fun keyOf(sourceId: String?, songId: String?, fallback: String): String =
         if (!sourceId.isNullOrBlank() && !songId.isNullOrBlank()) "online:$sourceId:$songId" else fallback
 
     /** 由 [Song] 造一条收藏记录。 */
-    fun from(song: Song): FavoriteSong = FavoriteSong(
-        id = keyOf(song),
-        title = song.title,
-        artist = song.artist,
-        album = song.album,
-        durationMs = song.durationMs,
-        kind = song.kind,
-        uri = song.uri.toString().takeIf { !song.isOnline && song.uri != Uri.EMPTY },
-        fileName = song.fileName,
-        remotePath = song.remotePath,
-        onlineSourceId = song.onlineSourceId,
-        onlineSongId = song.onlineSongId,
-        coverUrl = song.coverUrl
-    )
+    fun from(song: Song): FavoriteSong {
+        // 本地文件如果是下载来的，把音源身份一并写上：这样它能和在线版合并成一条，
+        // 哪天下载的文件被删了，还能回退到在线播
+        val ref = if (song.kind == SourceKind.LOCAL) {
+            DownloadStore.identityOf(song.fileName, song.sizeBytes)
+        } else null
+        return FavoriteSong(
+            id = keyOf(song),
+            title = song.title,
+            artist = song.artist,
+            album = song.album,
+            durationMs = song.durationMs,
+            kind = song.kind,
+            uri = song.uri.toString().takeIf { !song.isOnline && song.uri != Uri.EMPTY },
+            fileName = song.fileName,
+            remotePath = song.remotePath,
+            onlineSourceId = song.onlineSourceId ?: ref?.first,
+            onlineSongId = song.onlineSongId ?: ref?.second,
+            coverUrl = song.coverUrl
+        )
+    }
 
     @Synchronized
     private fun list(context: Context): MutableList<FavoriteSong> {
@@ -208,6 +225,8 @@ object FavoritesStore {
     @Synchronized
     fun enrich(context: Context, songs: List<Song>): Int {
         if (songs.isEmpty()) return 0
+        // 顺手把「按文件记的」老收藏改写成音源身份，免得和在线那份各占一条
+        normalize(context)
         val data = list(context)
         var filled = 0
         for (i in data.indices) {
@@ -226,6 +245,51 @@ object FavoritesStore {
     }
 
     // ---------------------------------------------------------------- 存取
+
+    /**
+     * 把「按文件记的」收藏升级成「按音源身份记的」。
+     *
+     * 早期版本在曲库里点心下载下来的歌时，只能记文件 Uri；同一天这首歌又从
+     * 「在线」点心过一次的话，歌单里就有两条看起来一模一样的记录。现在下载记录里
+     * 存了音源身份，启动时按文件名把老记录改写成规范 key，撞在一起的就合成一条。
+     *
+     * @return 改写的条数（0 表示不需要动）
+     */
+    @Synchronized
+    fun normalize(context: Context): Int {
+        val data = list(context)
+        if (data.isEmpty()) return 0
+        var changed = 0
+        val merged = ArrayList<FavoriteSong>(data.size)
+        data.forEach { raw ->
+            var entry = raw
+            if (!entry.hasOnlineIdentity && entry.fileName.isNotBlank()) {
+                DownloadStore.identityOf(entry.fileName)?.let { (sourceId, songId) ->
+                    entry = entry.copy(
+                        id = keyOf(sourceId, songId, entry.id),
+                        onlineSourceId = sourceId,
+                        onlineSongId = songId
+                    )
+                    changed++
+                }
+            }
+            val at = merged.indexOfFirst { it.id == entry.id }
+            if (at >= 0) {
+                // 同一首歌的两条记录：留下信息更全的那份（标题、时长通常来自在线那份）
+                val old = merged[at]
+                merged[at] = when {
+                    entry.title.isNotBlank() && old.title.isBlank() -> entry.copy(addedAt = minOf(old.addedAt, entry.addedAt))
+                    entry.title.isBlank() && old.title.isNotBlank() -> old.copy(addedAt = minOf(old.addedAt, entry.addedAt))
+                    else -> if (entry.addedAt < old.addedAt) entry else old
+                }
+                changed++
+            } else {
+                merged.add(entry)
+            }
+        }
+        if (changed > 0) persist(context, merged)
+        return changed
+    }
 
     private fun parse(text: String): MutableList<FavoriteSong> {
         val out = ArrayList<FavoriteSong>()

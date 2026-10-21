@@ -95,6 +95,8 @@ fun LibraryScreen(
     onSkipPrevious: () -> Unit,
     onSelectMode: (PlayMode) -> Unit,
     onOpenSources: () -> Unit,
+    /** 打开「我点心的歌曲」：点心只有一份歌单，曲库这里只是它的一个筛选视图。 */
+    onOpenFavorites: () -> Unit,
     favorites: Set<String>,
     modifier: Modifier = Modifier
 ) {
@@ -157,6 +159,45 @@ fun LibraryScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (folderUnreadable) {
                 FolderAccessBanner(folderLabel = folderLabel, onPickFolder = onPickFolder)
+            }
+            // 曲库只是「点心」的一个视图：在线的、下到别处的点心歌不在这里。
+            // 不说明清楚，用户会以为两边是两套收藏（明明点过心却在这看不到）。
+            val favInLibrary = remember(songs, favorites) {
+                songs.count { FavoritesStore.keyOf(it) in favorites }
+            }
+            if (favOnly && favorites.size > favInLibrary) {
+                val elsewhere = favorites.size - favInLibrary
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clickable(onClick = onOpenFavorites)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Favorite,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "还有 $elsewhere 首点心歌在在线或下载里",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "查看 ›",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
             }
             Box(modifier = Modifier.fillMaxSize().weight(1f)) {
                 if (songs.isEmpty()) {
@@ -334,8 +375,9 @@ private fun HeaderBar(
                     onClick = { onFavOnlyChange(!favOnly) },
                     label = {
                         Text(
-                            // 空收藏时只显示「我的喜欢」，不写「0 首」这种别扭的计数
-                            text = if (favCount > 0) "本地点心 $favCount" else "本地点心",
+                            // 空收藏时只显示「点心」，不写「0 首」这种别扭的计数。
+                            // 这里数的是曲库里的，全部点心（含在线）在「我点心的歌曲」里
+                            text = if (favCount > 0) "点心 $favCount" else "点心",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = if (favOnly) FontWeight.Bold else FontWeight.Medium
                         )

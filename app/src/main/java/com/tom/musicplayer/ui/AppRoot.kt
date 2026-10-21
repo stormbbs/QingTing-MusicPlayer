@@ -59,6 +59,7 @@ import com.tom.musicplayer.data.LibraryCache
 import com.tom.musicplayer.data.MusicScanner
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.UriGrant
+import com.tom.musicplayer.data.online.DownloadStore
 import com.tom.musicplayer.data.online.Downloader
 import com.tom.musicplayer.data.update.UpdateCenter
 import com.tom.musicplayer.model.Song
@@ -89,8 +90,8 @@ fun AppRoot() {
     var rescanJob by remember { mutableStateOf<Job?>(null) }
     // 从「在线」页进音源管理时，返回键要回在线页；从「我的」进则回「我的」
     var returnToOnline by remember { mutableStateOf(false) }
-    // 「我点心的歌曲」有两个入口（我的 / 我的歌单），返回要回到进来的地方
-    var favoritesFromMe by remember { mutableStateOf(false) }
+    // 「我点心的歌曲」有三个入口（我的 / 我的歌单 / 曲库筛选），返回要回到进来的地方
+    var favoritesBack by remember { mutableStateOf(AppScreen.PLAYLISTS) }
 
     /**
      * 「我的音乐」列表 == 本地曲库，独立于播放队列。
@@ -197,6 +198,12 @@ fun AppRoot() {
     }
 
     LaunchedEffect(Unit) {
+        // 下载索引要先就位：曲库里那个文件能不能认回「原本是音源里的哪首歌」全靠它，
+        // 认不出来，同一首歌在「我的音乐」和「在线」就会各有一套点心记录
+        withContext(Dispatchers.IO) {
+            runCatching { DownloadStore.load(context) }
+            runCatching { FavoritesStore.normalize(context) }
+        }
         // 服务可能还没起来（界面先启动），所以这里主动把磁盘上的收藏读一次
         PlayerController.syncFavorites(context)
 
@@ -223,6 +230,11 @@ fun AppRoot() {
     // 而不是等用户下次重启、或者自己去重新选一遍文件夹
     LaunchedEffect(Unit) {
         Downloader.saved.collect {
+            // 刚下完的歌从此有了音源身份：如果之前把本地文件点过心，这里把它并成一条
+            withContext(Dispatchers.IO) {
+                runCatching { FavoritesStore.normalize(context) }
+            }
+            PlayerController.syncFavorites(context)
             val uri = Prefs.getTreeUri(context) ?: return@collect
             if (Prefs.getDownloadTarget(context) == "saf") rescan(uri, library)
         }
@@ -254,11 +266,12 @@ fun AppRoot() {
                 onOpenSources = {
                     returnToOnline = true
                     screen = AppScreen.ONLINE_SOURCES
-                }
+                },
+                playerOpen = showPlayer
             )
             AppScreen.ME -> MeScreen(
                 onOpenDownloads = { screen = AppScreen.DOWNLOADS },
-                onOpenFavorites = { favoritesFromMe = true; screen = AppScreen.FAVORITES },
+                onOpenFavorites = { favoritesBack = AppScreen.ME; screen = AppScreen.FAVORITES },
                 onOpenPlaylists = { screen = AppScreen.PLAYLISTS },
                 onOpenSources = {
                     returnToOnline = false
@@ -276,7 +289,7 @@ fun AppRoot() {
                 onPickFolder = { folderPicker.launch(null) }
             )
             AppScreen.PLAYLISTS -> PlaylistsScreen(
-                onOpenFavorites = { favoritesFromMe = false; screen = AppScreen.FAVORITES },
+                onOpenFavorites = { favoritesBack = AppScreen.PLAYLISTS; screen = AppScreen.FAVORITES },
                 onBack = { screen = AppScreen.ME },
                 onPlay = { list, index ->
                     scope.launch {
@@ -288,7 +301,7 @@ fun AppRoot() {
             // 点心（收藏）就是一份歌单，点开直接能播，不用先转存
             AppScreen.FAVORITES -> FavoritesScreen(
                 library = library,
-                onBack = { screen = if (favoritesFromMe) AppScreen.ME else AppScreen.PLAYLISTS },
+                onBack = { screen = favoritesBack },
                 onPlay = { list, index ->
                     scope.launch {
                         withPlayer(context) { PlayerController.playSongs(context, list, index) }
@@ -314,6 +327,7 @@ fun AppRoot() {
                 mode = mode,
                 onPickFolder = { folderPicker.launch(null) },
                 onOpenSources = { screen = AppScreen.SOURCES },
+                onOpenFavorites = { favoritesBack = AppScreen.LIBRARY; screen = AppScreen.FAVORITES },
                 onSongClick = { index ->
                     val songList = library
                     scope.launch {
