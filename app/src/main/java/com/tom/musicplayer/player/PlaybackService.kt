@@ -21,6 +21,7 @@ import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.tom.musicplayer.MainActivity
 import com.tom.musicplayer.R
+import com.tom.musicplayer.util.CrashLogger
 
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -34,6 +35,9 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        // 记一笔「服务起来了」。如果上次的标记还在，说明上次是被系统直接收掉的，
+        // 而不是走到了 onDestroy —— 下次用户再遇到「App 没了」时能据此区分原因。
+        CrashLogger.markServiceStart(this)
         val player = ExoPlayer.Builder(this)
             // 换数据源：本地 content:// 仍走 ContentResolver，网络地址走带鉴权的 OkHttp，
             // 并且套一层磁盘缓存，网络歌曲听过一次就能离线重播。
@@ -46,6 +50,10 @@ class PlaybackService : MediaSessionService() {
                 true
             )
             .setHandleAudioBecomingNoisy(true)
+            // 播放期间同时握住 PARTIAL_WAKE_LOCK 和 WiFi 锁。
+            // 缺了它，息屏后 CPU 和 WiFi 会先后休眠：本地歌表现为进度卡住，
+            // 在线歌表现为缓冲中直接断流 —— 这正是「听着听着自己停了」的典型成因。
+            .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
 
         // 只记错误：某首歌放不出来时，adb logcat -s QingTing 能直接看到原因，
@@ -149,6 +157,7 @@ class PlaybackService : MediaSessionService() {
         // 这种重启必须把队列和进度补回来并接着播，否则音乐就断了 ——
         // 也就是用户反馈的「听着听着自己退出」。
         if (intent == null) {
+            Log.i(QT_TAG, "服务被系统重建，开始恢复队列与播放位置")
             PlayerController.restoreIfNeeded(this, autoPlay = true)
         }
         return result
@@ -158,12 +167,30 @@ class PlaybackService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = mediaSession?.player
-        if (player == null || !player.isPlaying) {
+        // 这里不能用 isPlaying 判断：缓冲中它同样是 false。用户划掉任务卡片的瞬间
+        // 恰好碰上缓冲，就会被误判成「没在放」而 stopSelf，音乐应声而断。
+        // 只要用户是想听（playWhenReady）且播放没结束，就应当继续活着。
+        val ongoing = player != null &&
+            player.playWhenReady &&
+            player.playbackState != Player.STATE_IDLE &&
+            player.playbackState != Player.STATE_ENDED
+        if (ongoing) {
+            Log.i(QT_TAG, "任务卡片被划掉，仍在播放，保持服务存活")
+        } else {
             stopSelf()
         }
     }
 
+    override fun onLowMemory() {
+        // 系统内存吃紧时会先回调这里，再决定是否回收本进程。
+        // 记一笔，方便事后对照「App 莫名消失」的时间点。
+        Log.w(QT_TAG, "onLowMemory：系统内存紧张，随时可能回收本进程")
+        super.onLowMemory()
+    }
+
     override fun onDestroy() {
+        // 走到了这里说明是正常销毁，清掉存活标记，下次启动就不会误报「被系统结束」
+        CrashLogger.markServiceStop(this)
         PlayerController.detach()
         PlayerController.attachSession(null)
         mediaSession?.let { session ->

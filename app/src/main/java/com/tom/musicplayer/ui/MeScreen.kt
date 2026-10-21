@@ -45,6 +45,8 @@ import com.tom.musicplayer.data.online.Downloader
 import com.tom.musicplayer.data.online.OnlineSourceStore
 import com.tom.musicplayer.player.PlayerDataSources
 import com.tom.musicplayer.player.PlayerController
+import com.tom.musicplayer.player.PowerGuard
+import com.tom.musicplayer.util.CrashLogger
 
 /** 「我的」：下载、歌单、音源，以及下载位置与音质这些偏好设置。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -186,6 +188,75 @@ fun MeScreen(
                     }) { Text("清理") }
                 }
             }
+            Spacer(modifier = Modifier.height(22.dp))
+            SectionTitle("后台播放")
+            Spacer(modifier = Modifier.height(8.dp))
+            // 状态只在进入页面时读一次。用户从系统设置改完回来时不会自动刷新，
+            // 所以旁边留一个「重新检测」，比在后台挂生命周期监听更省心。
+            var ignoringBattery by remember { mutableStateOf(PowerGuard.isIgnoringBatteryOptimizations(context)) }
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("电池优化", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = if (ignoringBattery)
+                                    "已允许后台运行，息屏后不会被系统提前回收"
+                                else "系统仍会限制后台，息屏久了有被清掉的可能",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (ignoringBattery) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (!ignoringBattery) {
+                            androidx.compose.material3.TextButton(onClick = {
+                                if (!PowerGuard.requestIgnore(context)) {
+                                    PowerGuard.openAppDetails(context)
+                                }
+                            }) { Text("去设置") }
+                        }
+                    }
+                    if (!ignoringBattery) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.TextButton(onClick = {
+                                ignoringBattery = PowerGuard.isIgnoringBatteryOptimizations(context)
+                            }) { Text("重新检测") }
+                            androidx.compose.material3.TextButton(onClick = {
+                                PowerGuard.openAppDetails(context)
+                            }) { Text("应用详情") }
+                        }
+                    }
+                    PowerGuard.romHint()?.let { hint ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = hint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // 只在真的发生过时才显示，平时不占版面
+                    remember { CrashLogger.lastKilledAt(context) }?.let { since ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "上次播放服务被系统直接回收（起始于 $since），不是崩溃。" +
+                                "偶尔一次可忽略；频繁出现说明后台管控还在生效。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "息屏播放靠的是系统的「前台服务 + 唤醒锁」，这部分已经由 App 自己保证。" +
+                            "如果仍然偶发中断，基本是系统或 ROM 的后台管控所致，需要按上面的说明放行。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }

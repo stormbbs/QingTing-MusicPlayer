@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 息屏后必须拿一把 PARTIAL_WAKE_LOCK，否则 CPU 进深度睡眠，解码线程被冻结，
+         表现为「听着听着自己停了 / App 被退出」。Media3 的 MediaSession 默认就要这把锁，
+         但少了这条权限会静默拿不到（dumpsys power 里根本看不到本 App 的锁）。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 用于在系统设置里申请「不受电池优化限制」，减少国产 ROM 的后台清理 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <queries>
         <intent>
@@ -39,6 +45,7 @@
         <service
             android:name=".player.PlaybackService"
             android:exported="true"
+            android:stopWithTask="false"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
