@@ -1,5 +1,7 @@
 package com.tom.musicplayer.data.online
 
+import com.tom.musicplayer.data.online.builtin.BuiltinEngine
+import com.tom.musicplayer.data.online.builtin.BuiltinEngines
 import com.tom.musicplayer.model.OnlinePlaylist
 import com.tom.musicplayer.model.OnlineSong
 import com.tom.musicplayer.model.OnlineSource
@@ -58,6 +60,13 @@ object OnlineApi {
     }
 
     // ------------------------------------------------------------- 基础请求
+
+    /**
+     * 内置源走 App 自带的引擎，自定义源走 HTTP 协议。
+     * 这里是两条路的分岔口：只要 provider 有值，下面所有接口都不会发 HTTP 请求。
+     */
+    private fun engineOf(src: OnlineSource): BuiltinEngine? =
+        if (src.isBuiltin) BuiltinEngines.of(src.provider) else null
 
     private fun authHeader(src: OnlineSource): String? = when {
         src.token.isNotBlank() -> "Bearer ${src.token}"
@@ -140,6 +149,7 @@ object OnlineApi {
         page: Int = 1,
         limit: Int = 30
     ): List<OnlineSong> = withContext(Dispatchers.IO) {
+        engineOf(src)?.let { return@withContext it.search(src, keyword, page, limit) }
         val json = getJson(src, "/search", mapOf(
             "keyword" to keyword,
             "page" to page.toString(),
@@ -150,6 +160,7 @@ object OnlineApi {
     }
 
     suspend fun playlists(src: OnlineSource): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
+        engineOf(src)?.let { return@withContext it.playlists(src) }
         val json = getJson(src, "/playlists", emptyMap())
         val arr = json.optJSONArray("playlists") ?: return@withContext emptyList()
         val out = ArrayList<OnlinePlaylist>(arr.length())
@@ -177,6 +188,9 @@ object OnlineApi {
         playlistId: String,
         quality: String
     ): Pair<String, List<OnlineSong>> = withContext(Dispatchers.IO) {
+        engineOf(src)?.let {
+            return@withContext it.playlistSongs(src, playlistId, 1, 200)
+        }
         val json = getJson(src, "/playlist", mapOf(
             "id" to playlistId,
             "page" to "1",
@@ -188,6 +202,7 @@ object OnlineApi {
 
     /** 歌词。源没给就返回 null，调用方会回落到 LRCLIB。 */
     suspend fun lyric(src: OnlineSource, songId: String): String? = withContext(Dispatchers.IO) {
+        engineOf(src)?.let { return@withContext it.lyric(src, songId) }
         runCatching {
             getJson(src, "/lyric", mapOf("id" to songId))
                 .optString("lyric").takeIf { it.isNotBlank() }
@@ -208,6 +223,8 @@ object OnlineApi {
      */
     @Synchronized
     fun resolveBlocking(src: OnlineSource, songId: String, quality: String): ResolvedUrl {
+        // 内置源的直链由引擎内部解析并缓存（要带密钥、要降档回退）
+        engineOf(src)?.let { return it.resolveBlocking(src, songId, quality, "", "") }
         val key = cacheKey(src, songId, quality)
         peekCache(key)?.let { return it }
         val json = getJson(src, "/url", mapOf("id" to songId, "quality" to quality))
@@ -226,6 +243,7 @@ object OnlineApi {
 
     /** 连一下根路径，用于「测试连通性」。成功返回 null，失败返回原因。 */
     suspend fun test(src: OnlineSource): String? = withContext(Dispatchers.IO) {
+        engineOf(src)?.let { return@withContext it.test(src) }
         runCatching {
             getJson(src, "/", emptyMap())
             null

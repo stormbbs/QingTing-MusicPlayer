@@ -88,6 +88,22 @@ private val QUALITIES = listOf("standard" to "标准", "high" to "高品", "loss
  * 因为 App 本身不生产数据，它只是把标识交给音源、拿回链接播放。
  */
 @OptIn(ExperimentalMaterial3Api::class)
+/**
+ * 多个音源的结果按「来源轮流」交替合并。
+ *
+ * 直接 flatMap 拼接的话，第一个源的几十条会把后面的源全挤到列表末尾，
+ * 用户根本翻不到第二个源的东西——看起来就像「只搜到一个源」。
+ * 交错之后每个源的内容都能出现在前几屏。
+ */
+private fun <T> List<List<T>>.interleave(): List<T> {
+    val max = maxOfOrNull { it.size } ?: 0
+    val out = ArrayList<T>(sumOf { it.size })
+    for (i in 0 until max) {
+        for (list in this) if (i < list.size) out.add(list[i])
+    }
+    return out
+}
+
 @Composable
 fun OnlineScreen(
     onPlaySongs: (List<Song>, Int) -> Unit,
@@ -148,7 +164,7 @@ fun OnlineScreen(
                     async(Dispatchers.IO) {
                         runCatching { OnlineApi.search(src, keyword, quality) }.getOrElse { emptyList() }
                     }
-                }.flatMap { it.await() }
+                }.map { it.await() }.interleave()
             }
             results = merged
             loading = false
@@ -166,7 +182,7 @@ fun OnlineScreen(
                     async(Dispatchers.IO) {
                         runCatching { OnlineApi.playlists(src) }.getOrElse { emptyList() }
                     }
-                }.flatMap { it.await() }
+                }.map { it.await() }.interleave()
             }
             playlists = merged
             loading = false

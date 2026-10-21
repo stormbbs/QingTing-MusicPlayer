@@ -75,6 +75,7 @@ fun OnlineSourceScreen(
     val sources = remember(version) { OnlineSourceStore.load(context) }
     var editing by remember { mutableStateOf<OnlineSource?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
 
@@ -99,12 +100,12 @@ fun OnlineSourceScreen(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = { creating = true }) {
+                IconButton(onClick = { picking = true }) {
                     Icon(Icons.Default.Add, contentDescription = "添加音源")
                 }
             }
             Text(
-                text = "App 本身不提供歌曲。添加一个符合协议的音源服务，就能搜索、播放在线音乐。",
+                text = "内置源开箱即用，填一次密钥就能播；也可以再加任何符合协议的第三方音源。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -172,6 +173,39 @@ fun OnlineSourceScreen(
         }
     }
 
+    if (picking) {
+        val missing = OnlineSourceStore.missingBuiltins(context)
+        AlertDialog(
+            onDismissRequest = { picking = false },
+            title = { Text("添加音源") },
+            text = {
+                Column {
+                    Text(
+                        text = "内置平台开箱即用，不用架服务；也可以接入任何符合协议的第三方音源。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    missing.forEach { p ->
+                        PickRow(p.displayName, p.description) {
+                            OnlineSourceStore.restoreBuiltin(context, p)
+                            version++
+                            picking = false
+                            toast = "已添加「${p.displayName}」，点「设置」可填密钥"
+                        }
+                    }
+                    PickRow("自定义协议音源", "填一个符合在线音源协议的服务地址") {
+                        picking = false
+                        creating = true
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { picking = false }) { Text("取消") }
+            }
+        )
+    }
+
     if (creating || editing != null) {
         SourceEditDialog(
             source = editing,
@@ -225,18 +259,32 @@ private fun SourceCard(
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = source.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (source.isBuiltin) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Tag("内置")
+                        }
+                    }
                     Text(
-                        text = source.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = source.baseUrl,
+                        text = source.subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (source.needsKey) {
+                        Text(
+                            text = "还没填密钥，只能搜索、不能播放",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
                 Switch(checked = source.enabled, onCheckedChange = onToggle)
             }
@@ -244,8 +292,11 @@ private fun SourceCard(
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (it.startsWith("可用")) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.error,
+                    color = when {
+                        it.startsWith("可用") -> MaterialTheme.colorScheme.primary
+                        it.contains("能搜索") -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.error
+                    },
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
@@ -266,7 +317,7 @@ private fun SourceCard(
                 TextButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("编辑")
+                    Text(if (source.isBuiltin) "设置" else "编辑")
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 IconButton(onClick = onDelete) {
@@ -277,12 +328,56 @@ private fun SourceCard(
     }
 }
 
+/** 小标签，「内置」这种。 */
+@Composable
+private fun Tag(text: String) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+        )
+    }
+}
+
+/** 「添加音源」里的一个选项。 */
+@Composable
+private fun PickRow(title: String, desc: String, onClick: () -> Unit) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 @Composable
 private fun SourceEditDialog(
     source: OnlineSource?,
     onDismiss: () -> Unit,
     onSave: (OnlineSource) -> Unit
 ) {
+    // 内置源只让改名字和密钥：服务地址、鉴权方式这些东西由 App 的引擎决定，改不了
+    val builtin = source?.isBuiltin == true
     var name by remember { mutableStateOf(source?.name ?: "") }
     // 不留 "http://" 前缀做初值：它看着像提示，实际会变成地址的一部分，
     // 用户补完地址常常变成 "http://...://" 这种拼坏的结果
@@ -290,18 +385,44 @@ private fun SourceEditDialog(
     var token by remember { mutableStateOf(source?.token ?: "") }
     var user by remember { mutableStateOf(source?.user ?: "") }
     var password by remember { mutableStateOf(source?.password ?: "") }
+    var apiKey by remember { mutableStateOf(source?.apiKey ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (source == null) "添加音源" else "编辑音源") },
+        title = {
+            Text(
+                when {
+                    source == null -> "添加音源"
+                    builtin -> "设置内置音源"
+                    else -> "编辑音源"
+                }
+            )
+        },
         text = {
             Column {
-                Field("名字", name, { name = it }, "我的音源")
-                Field("服务地址", baseUrl, { baseUrl = it; error = null }, "https://music.example.com/api")
-                Field("令牌 token（可选）", token, { token = it }, "")
-                Field("用户名（可选）", user, { user = it }, "")
-                Field("密码（可选）", password, { password = it }, "")
+                if (builtin) {
+                    Text(
+                        text = "搜索、榜单、歌词由 App 内置引擎直接提供，不用填服务地址。" +
+                            "播放要解析直链，所以需要一个密钥。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Field("显示名", name, { name = it }, source?.name.orEmpty())
+                    Field("音源密钥", apiKey, { apiKey = it; error = null }, "CERU_KEY-...")
+                    Text(
+                        text = "没填也能搜索和浏览，只是点播放会提示缺密钥。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                } else {
+                    Field("名字", name, { name = it }, "我的音源")
+                    Field("服务地址", baseUrl, { baseUrl = it; error = null }, "https://music.example.com/api")
+                    Field("令牌 token（可选）", token, { token = it }, "")
+                    Field("用户名（可选）", user, { user = it }, "")
+                    Field("密码（可选）", password, { password = it }, "")
+                }
                 error?.let {
                     Text(
                         text = it,
@@ -314,6 +435,16 @@ private fun SourceEditDialog(
         },
         confirmButton = {
             TextButton(onClick = {
+                val current = source
+                if (builtin && current != null) {
+                    onSave(
+                        current.copy(
+                            name = name.trim().ifBlank { current.name },
+                            apiKey = apiKey.trim()
+                        )
+                    )
+                    return@TextButton
+                }
                 val url = baseUrl.trim()
                 if (url.isBlank() || url == "http://" || url == "https://") {
                     error = "服务地址不能为空"
@@ -321,7 +452,7 @@ private fun SourceEditDialog(
                 }
                 onSave(
                     OnlineSource(
-                        id = source?.id ?: OnlineSourceStore.newId(),
+                        id = current?.id ?: OnlineSourceStore.newId(),
                         // 没填名字就用域名兜底。直接用整条 URL 的话，卡片上标题和
                         // 副标题会显示同一个字符串，看着像渲染重复了。
                         name = name.trim().ifBlank {
@@ -331,7 +462,7 @@ private fun SourceEditDialog(
                         token = token.trim(),
                         user = user.trim(),
                         password = password,
-                        enabled = source?.enabled ?: true
+                        enabled = current?.enabled ?: true
                     )
                 )
             }) { Text("保存") }

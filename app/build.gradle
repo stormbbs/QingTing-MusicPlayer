@@ -4,6 +4,24 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+/**
+ * 内置音源（酷我 / 网易云）解析直链要用的密钥。
+ *
+ * 不写死在代码里，是因为这个密钥是永久授权，一旦进仓库等于公开。
+ * 改成从 local.properties 读——那个文件已被 .gitignore 忽略，
+ * 你自己在本地填一次，构建出来的 APK 就自带密钥；别人 clone 下来是空的，
+ * 得自己在 App 的「音源管理」里填。
+ *
+ *   # local.properties
+ *   LINGLAN_KEY=CERU_KEY-xxxx
+ */
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+def linglanKey = localProps.getProperty('LINGLAN_KEY', '') ?: ''
+
 android {
     namespace 'com.tom.musicplayer'
     compileSdk 35
@@ -12,8 +30,10 @@ android {
         applicationId 'com.tom.musicplayer'
         minSdk 26
         targetSdk 35
-        versionCode 4
-        versionName '1.3-1020'
+        versionCode 5
+        versionName '1.4-1021'
+
+        buildConfigField 'String', 'LINGLAN_KEY', "\"${linglanKey}\""
     }
 
     buildTypes {
@@ -34,6 +54,7 @@ android {
 
     buildFeatures {
         compose true
+        buildConfig true
     }
 
     packaging {

@@ -3,41 +3,66 @@ package com.tom.musicplayer.model
 /**
  * 一个在线音源。
  *
- * 「轻听」自己没有抓音频的能力：它把歌曲标识交给音源，音源返回一个直链，App 拿来播。
- * 所以音源是什么、数据从哪来，完全由填进来的 [baseUrl] 决定 —— 可以是你自己的服务器，
- * 也可以是任何符合 `docs/ONLINE_SOURCE_PROTOCOL.md` 的第三方服务。
+ * 「轻听」自己不抓音频：它把歌曲标识交给音源，音源返回一个直链，App 拿来播。
+ * 音源有两种形态，由 [provider] 区分：
  *
- * @property baseUrl 音源根地址，末尾可带可不带斜杠，例如 https://music.example.com/api
- * @property token   填了就带 `Authorization: Bearer <token>`
+ * - **内置源**（[provider] 非空）：搜索、榜单、歌词、封面全部由 App 内的引擎直接实现，
+ *   不走 HTTP 协议，也不需要用户填服务地址。目前内置 `kw`（酷我）和 `wy`（网易云）。
+ *   这类源唯一需要配置的是 [apiKey]——解析播放直链用的密钥。
+ * - **自定义源**（[provider] 为空）：任意符合 `docs/ONLINE_SOURCE_PROTOCOL.md` 的第三方服务，
+ *   由 [baseUrl] 指定地址。
+ *
+ * @property provider 内置引擎标识（`kw` / `wy`），空串表示自定义 HTTP 音源
+ * @property apiKey   内置源专用的直链解析密钥；自定义源用 [token] / [user] + [password]
+ * @property baseUrl  自定义音源的根地址；内置源留空
+ * @property token    填了就带 `Authorization: Bearer <token>`
  * @property user / password 没填 token 时，用 Basic 鉴权
  */
 data class OnlineSource(
     val id: String,
     val name: String,
-    val baseUrl: String,
+    val baseUrl: String = "",
     val token: String = "",
     val user: String = "",
     val password: String = "",
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val provider: String = "",
+    val apiKey: String = ""
 ) {
     val trimmedBase: String get() = baseUrl.trim().trimEnd('/')
+
+    /** 内置源：能力由 App 自带引擎提供，不依赖任何 HTTP 服务。 */
+    val isBuiltin: Boolean get() = provider.isNotBlank()
+
+    /** 内置源没配密钥时能搜索但播不了，UI 要据此提示。 */
+    val needsKey: Boolean get() = isBuiltin && apiKey.isBlank()
 
     fun url(path: String): String =
         trimmedBase + if (path.startsWith("/")) path else "/$path"
 
-    /** 从导入的 JSON 里解析。baseUrl 是唯一必填项。 */
+    /** 卡片上那行灰色小字：内置源说明来源，自定义源显示地址。 */
+    val subtitle: String
+        get() = if (isBuiltin) "内置引擎 · 无需服务地址" else baseUrl
+
+    /** 从导入的 JSON 里解析。自定义源要求 baseUrl，内置源要求 provider。 */
     companion object {
         fun fromJson(o: org.json.JSONObject, fallbackId: String = ""): OnlineSource? {
             val base = o.optString("baseUrl").trim()
-            if (base.isBlank()) return null
+            val provider = o.optString("provider").trim()
+            if (base.isBlank() && provider.isBlank()) return null
+            if (provider.isNotBlank() && BuiltinProvider.of(provider) == null) return null
             return OnlineSource(
                 id = o.optString("id").ifBlank { fallbackId.ifBlank { java.util.UUID.randomUUID().toString() } },
-                name = o.optString("name").ifBlank { base },
+                name = o.optString("name").ifBlank {
+                    BuiltinProvider.of(provider)?.displayName ?: base
+                },
                 baseUrl = base,
                 token = o.optString("token", ""),
                 user = o.optString("user", ""),
                 password = o.optString("password", ""),
-                enabled = o.optBoolean("enabled", true)
+                enabled = o.optBoolean("enabled", true),
+                provider = provider,
+                apiKey = o.optString("apiKey", "")
             )
         }
 
@@ -50,7 +75,40 @@ data class OnlineSource(
                 put("user", s.user)
                 put("password", s.password)
                 put("enabled", s.enabled)
+                put("provider", s.provider)
+                put("apiKey", s.apiKey)
             }
+    }
+}
+
+/**
+ * 内置引擎清单。
+ *
+ * 放这里而不是放引擎包里，是因为模型层要给 UI 提供名字和说明，
+ * 不能让 UI 反过来依赖数据层（不然导入校验会绕成环）。
+ */
+enum class BuiltinProvider(
+    val key: String,
+    val displayName: String,
+    val description: String,
+    /** 该平台在聆澜密钥下开放的音质档位 */
+    val qualities: List<String>
+) {
+    KW(
+        key = "kw",
+        displayName = "酷我音乐",
+        description = "华语曲库全，单曲搜索、榜单、歌词、封面",
+        qualities = listOf("standard", "high", "lossless")
+    ),
+    WY(
+        key = "wy",
+        displayName = "网易云音乐",
+        description = "歌单与乐评生态，单曲搜索、榜单、歌词、封面",
+        qualities = listOf("standard", "high", "lossless")
+    );
+
+    companion object {
+        fun of(key: String): BuiltinProvider? = entries.firstOrNull { it.key == key }
     }
 }
 
