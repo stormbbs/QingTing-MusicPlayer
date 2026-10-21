@@ -30,3 +30,8 @@ tools/mf_bridge/idmap.json
 tools/mf_bridge/bridge.log
 # 第三方插件不随仓库分发（各家许可不同，自己下载）
 tools/mf_bridge/plugins/*.js
+
+# LX 桥接器（tools/lx_bridge）
+# 密钥是永久授权，绝对不能进仓库
+tools/lx_bridge/.env
+tools/lx_bridge/bridge.log

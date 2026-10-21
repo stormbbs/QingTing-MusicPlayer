@@ -1,0 +1,13 @@
+{
+  "name": "qingting-lx-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "把 LX Music 内置源的元数据接口 + 聆澜音源直链，桥接成《轻听在线音源协议 v1》",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js 18093"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
