@@ -66,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.tom.musicplayer.data.FavoritesStore
 import com.tom.musicplayer.model.Song
 import com.tom.musicplayer.player.PlayMode
 import com.tom.musicplayer.ui.components.AlbumArt
@@ -110,7 +111,7 @@ fun LibraryScreen(
                     song.artist.contains(query, ignoreCase = true) ||
                     song.album.contains(query, ignoreCase = true) ||
                     song.fileName.contains(query, ignoreCase = true)
-                matchesText && (!favOnly || song.id in favorites)
+                matchesText && (!favOnly || FavoritesStore.keyOf(song) in favorites)
             }
     }
     val filtering = query.isNotBlank() || favOnly
@@ -130,7 +131,11 @@ fun LibraryScreen(
                 onQueryChange = { query = it },
                 favOnly = favOnly,
                 onFavOnlyChange = { favOnly = it },
-                favCount = favorites.size,
+                // 只数曲库里的：这个开关过滤的是本地列表，
+                // 拿全部收藏数（含在线歌）来显示，会和筛出来的行数对不上
+                favCount = remember(songs, favorites) {
+                    songs.count { FavoritesStore.keyOf(it) in favorites }
+                },
                 onPickFolder = onPickFolder,
                 onSelectMode = onSelectMode,
                 onOpenSources = onOpenSources
@@ -167,7 +172,7 @@ fun LibraryScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = if (favOnly) "收藏里还没有歌" else "没有匹配的歌曲",
+                            text = if (favOnly) "还没有点心的歌" else "没有匹配的歌曲",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -189,7 +194,7 @@ fun LibraryScreen(
                             SongRow(
                                 song = song,
                                 isCurrent = originalIndex == currentIndex,
-                                isFavorite = song.id in favorites,
+                                isFavorite = FavoritesStore.keyOf(song) in favorites,
                                 onToggleFavorite = { onToggleFavorite(song) },
                                 onClick = {
                                     if (filtering) {
@@ -330,7 +335,7 @@ private fun HeaderBar(
                     label = {
                         Text(
                             // 空收藏时只显示「我的喜欢」，不写「0 首」这种别扭的计数
-                            text = if (favCount > 0) "我的喜欢 $favCount" else "我的喜欢",
+                            text = if (favCount > 0) "本地点心 $favCount" else "本地点心",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = if (favOnly) FontWeight.Bold else FontWeight.Medium
                         )
@@ -556,7 +561,7 @@ private fun SongRow(
             IconButton(onClick = onToggleFavorite) {
                 Icon(
                     imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = if (isFavorite) "取消收藏" else "收藏这首歌",
+                    contentDescription = if (isFavorite) "取消点心" else "点心这首歌",
                     modifier = Modifier.size(20.dp),
                     tint = if (isFavorite) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant

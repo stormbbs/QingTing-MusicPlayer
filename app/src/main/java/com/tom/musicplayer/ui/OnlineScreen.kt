@@ -25,6 +25,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -63,6 +65,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.online.LocalPlaylistStore
 import com.tom.musicplayer.data.online.Downloader
@@ -71,6 +74,7 @@ import com.tom.musicplayer.data.online.OnlineSourceStore
 import com.tom.musicplayer.model.OnlinePlaylist
 import com.tom.musicplayer.model.OnlineSong
 import com.tom.musicplayer.model.Song
+import com.tom.musicplayer.player.PlayerController
 import com.tom.musicplayer.util.formatDuration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -145,6 +149,8 @@ fun OnlineScreen(
     // 音源是可以在别的页面改的，回来时要重新读，所以用个版本号触发
     var sourceVersion by remember { mutableIntStateOf(0) }
     val sources = remember(sourceVersion) { OnlineSourceStore.enabled(context) }
+    // 心形跟着收藏走：在别处取消点心，这里的图标也要跟着灭
+    val favorites by PlayerController.favorites.collectAsStateWithLifecycle()
 
     fun search(keyword: String) {
         if (sources.isEmpty()) {
@@ -324,7 +330,9 @@ fun OnlineScreen(
                                     dismissKeyboard()
                                     scope.launch { Downloader.download(context, song, quality) }
                                 },
-                                onAdd = { addTarget = it }
+                                onAdd = { addTarget = it },
+                                favorites = favorites,
+                                onToggleFavorite = { PlayerController.toggleFavorite(it.toSong()) }
                             )
                         }
                     }
@@ -352,7 +360,9 @@ fun OnlineScreen(
                             dismissKeyboard()
                             scope.launch { Downloader.download(context, song, quality) }
                         },
-                        onAdd = { addTarget = it }
+                        onAdd = { addTarget = it },
+                        favorites = favorites,
+                        onToggleFavorite = { PlayerController.toggleFavorite(it.toSong()) }
                     )
                 }
             }
@@ -446,7 +456,9 @@ private fun SongResultList(
     songs: List<OnlineSong>,
     onPlay: (Int) -> Unit,
     onDownload: (OnlineSong) -> Unit,
-    onAdd: (OnlineSong) -> Unit
+    onAdd: (OnlineSong) -> Unit,
+    favorites: Set<String>,
+    onToggleFavorite: (OnlineSong) -> Unit
 ) {
     LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
         itemsIndexed(songs, key = { _, s -> s.globalId }) { index, song ->
@@ -502,6 +514,16 @@ private fun SongResultList(
                         text = formatDuration(song.durationMs),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // 点心：搜到就收，不必先播一遍。收进去的歌会出现在「我的歌单 → 我点心的歌曲」
+                val fav = song.globalId in favorites
+                IconButton(onClick = { onToggleFavorite(song) }) {
+                    Icon(
+                        imageVector = if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (fav) "取消点心" else "点心",
+                        tint = if (fav) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 IconButton(onClick = { onDownload(song) }) {

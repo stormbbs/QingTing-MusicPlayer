@@ -19,7 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
@@ -44,8 +46,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tom.musicplayer.data.online.LocalPlaylistStore
 import com.tom.musicplayer.model.Song
+import com.tom.musicplayer.player.PlayerController
 import com.tom.musicplayer.util.formatDuration
 
 /**
@@ -53,10 +57,14 @@ import com.tom.musicplayer.util.formatDuration
  *
  * 这是**本地**歌单：里面每首歌只存标识和展示信息，不存播放地址，
  * 所以换个音源、音源那边改了直链，歌单都还在，点开照常播。
+ *
+ * 列表第一条是固定的「我点心的歌曲」——它不是自建歌单，而是收藏本身，
+ * 不允许改名和删除（要删就去里面把心取消掉），所以单独占了最上面一行。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistsScreen(
+    onOpenFavorites: () -> Unit,
     onBack: () -> Unit,
     onPlay: (List<Song>, Int) -> Unit,
     modifier: Modifier = Modifier
@@ -64,6 +72,8 @@ fun PlaylistsScreen(
     val context = LocalContext.current
     var version by remember { mutableIntStateOf(0) }
     val playlists = remember(version) { LocalPlaylistStore.load(context) }
+    // 收藏可能在别处变（播放页、通知栏），这里跟着变，计数才是真的
+    val favorites by PlayerController.favorites.collectAsStateWithLifecycle()
     var openId by remember { mutableStateOf<String?>(null) }
     var createOpen by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
@@ -187,25 +197,78 @@ fun PlaylistsScreen(
                         }
                     }
                 }
-            } else if (playlists.isEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "还没有自建歌单",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "在「在线」页搜到歌，点「加到歌单」图标就能攒起来",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             } else {
                 LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
+                    // 固定第一条：点心（收藏）本身就是一份歌单，不用先新建再往里加
+                    item(key = "favorites") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = onOpenFavorites)
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Favorite,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "我点心的歌曲",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = if (favorites.isEmpty()) "点过心的歌会自动进来"
+                                    else "${favorites.size} 首 · 在线和本地都在这里",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (playlists.isEmpty()) {
+                        item(key = "empty") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "还没有自建歌单",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "在「在线」页搜到歌，点「加到歌单」图标就能攒起来",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
                     items(playlists, key = { it.id }) { p ->
                         Row(
                             modifier = Modifier

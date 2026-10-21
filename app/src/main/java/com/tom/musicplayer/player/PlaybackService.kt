@@ -12,7 +12,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSession.ConnectionResult
 import androidx.media3.session.MediaSessionService
@@ -20,7 +19,6 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.tom.musicplayer.MainActivity
-import com.tom.musicplayer.R
 import com.tom.musicplayer.util.CrashLogger
 
 @OptIn(UnstableApi::class)
@@ -66,11 +64,11 @@ class PlaybackService : MediaSessionService() {
 
         val session = MediaSession.Builder(this, player)
             .setBitmapLoader(ArtworkBitmapLoader(applicationContext))
-            // 收藏按钮要靠 Session 回调接回来：通知栏只是把命令丢给 Session
+            // 收藏 / 下载按钮要靠 Session 回调接回来：通知栏只是把命令丢给 Session
             .setCallback(SessionCallback())
-            // 先把「收藏」按钮摆到通知栏上（初始按未收藏画），
-            // 之后的图标切换由 PlayerController 在切歌 / 收藏变化时刷新
-            .setCustomLayout(listOf(favoriteButton(favorite = false)))
+            // 先把按钮摆到通知栏上（初版按未收藏画，下载按钮要等队列就绪后
+            // 由 PlayerController 判断是不是在线歌再补上）
+            .setCustomLayout(listOf(NotificationActions.favorite(favorite = false)))
             .setSessionActivity(
                 PendingIntent.getActivity(
                     this,
@@ -91,15 +89,6 @@ class PlaybackService : MediaSessionService() {
         PlayerController.restoreIfNeeded(this, autoPlay = false)
     }
 
-    /** 通知栏上的「收藏」按钮。图标必须是资源 id，系统界面才拿得到。 */
-    private fun favoriteButton(favorite: Boolean): CommandButton =
-        CommandButton.Builder()
-            .setSessionCommand(MediaCommands.toggleFavorite())
-            .setIconResId(if (favorite) R.drawable.ic_favorite_filled else R.drawable.ic_favorite_border)
-            .setDisplayName(getString(if (favorite) R.string.cmd_unfavorite else R.string.cmd_favorite))
-            .setEnabled(true)
-            .build()
-
     private fun ok(): ListenableFuture<SessionResult> {
         val future = ResolvableFuture.create<SessionResult>()
         future.set(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -107,9 +96,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     /**
-     * 会话回调：放行「收藏」这条自定义命令，并处理它。
+     * 会话回调：放行「收藏」「下载」这两条自定义命令，并处理它们。
      *
-     * 注意 [onConnect] 必须把这条 command 放进 SessionCommands，
+     * 注意 [onConnect] 必须把这些 command 放进 SessionCommands，
      * 否则系统界面（通知栏）会认为它不支持，按钮压根不会显示。
      */
     private inner class SessionCallback : MediaSession.Callback {
@@ -120,6 +109,7 @@ class PlaybackService : MediaSessionService() {
         ): ConnectionResult {
             val sessionCommands = SessionCommands.Builder()
                 .add(MediaCommands.toggleFavorite())
+                .add(MediaCommands.downloadCurrent())
                 .build()
             return ConnectionResult.accept(
                 sessionCommands,
@@ -129,7 +119,7 @@ class PlaybackService : MediaSessionService() {
 
         override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
             // 控制器连上来时补一次，保证通知栏按钮图标与当前曲目一致
-            runCatching { PlayerController.pushFavoriteLayout() }
+            runCatching { PlayerController.pushActionLayout() }
         }
 
         override fun onCustomCommand(
@@ -138,12 +128,24 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == MediaCommands.TOGGLE_FAVORITE) {
-                // toggleFavoriteCurrent 会直接返回「切换之后」的收藏状态，
-                // 写文件是异步的，等 PlayerController 再推一轮就来不及给按钮换图标了
-                val added = PlayerController.toggleFavoriteCurrent()
-                session.setCustomLayout(listOf(favoriteButton(added)))
-                return ok()
+            when (customCommand.customAction) {
+                MediaCommands.TOGGLE_FAVORITE -> {
+                    // toggleFavoriteCurrent 会直接返回「切换之后」的收藏状态，
+                    // 写文件是异步的，等 PlayerController 再推一轮就来不及给按钮换图标了
+                    PlayerController.toggleFavoriteCurrent()
+                    PlayerController.pushActionLayout()
+                    return ok()
+                }
+                MediaCommands.DOWNLOAD_CURRENT -> {
+                    // 正在播的这首下下来。用户可能是在锁屏或车机上点的，
+                    // 下载任务自己带后台作用域，App 被切走也不影响
+                    val started = PlayerController.downloadCurrent()
+                    Log.i(
+                        QT_TAG,
+                        if (started) "通知栏请求下载当前歌曲" else "当前歌曲无需/无法下载"
+                    )
+                    return ok()
+                }
             }
             val future = ResolvableFuture.create<SessionResult>()
             future.set(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))

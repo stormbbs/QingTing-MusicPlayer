@@ -164,3 +164,25 @@ data class OnlineSong(
         sizeBytes = 0L
     )
 }
+
+/**
+ * 反向转换：拿到一首正在播的在线歌，还想再下载它时用。
+ *
+ * 下载只需要「哪个音源 + 音源里的哪个 id」这两样，其余字段只是拿来写文件名和
+ * 媒体库元数据的，[Song] 里都留着，所以不用再回音源查一遍。
+ * 本地 / WebDAV 的歌没有音源归属，返回 null。
+ */
+fun Song.toOnlineSong(): OnlineSong? {
+    if (!isOnline) return null
+    val src = onlineSourceId?.takeIf { it.isNotBlank() } ?: return null
+    val sid = onlineSongId?.takeIf { it.isNotBlank() } ?: return null
+    return OnlineSong(
+        songId = sid,
+        name = title,
+        artist = artist,
+        album = album,
+        durationMs = durationMs,
+        cover = coverUrl,
+        sourceId = src
+    )
+}

@@ -13,6 +13,9 @@ object Prefs {
     private const val KEY_WAS_PLAYING = "was_playing"
     private const val KEY_QUALITY = "online_quality"
     private const val KEY_DOWNLOAD_TARGET = "download_target"
+    private const val KEY_UPDATE_URL = "update_manifest_url"
+    private const val KEY_AUTO_UPDATE = "auto_check_update"
+    private const val KEY_SKIP_UPDATE = "skip_update_code"
 
     private fun sp(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -35,6 +38,33 @@ object Prefs {
 
     fun getDownloadTarget(context: Context): String =
         sp(context).getString(KEY_DOWNLOAD_TARGET, "app") ?: "app"
+
+    // ---------------------------------------------------------------- 升级
+
+    /**
+     * 更新清单地址。留空就用内置默认源（仓库里的 latest.json），
+     * 填了就只认填的这个 —— 有人把 APK 放自己服务器上时用得到。
+     */
+    fun saveUpdateUrl(context: Context, url: String) {
+        sp(context).edit().putString(KEY_UPDATE_URL, url.trim()).apply()
+    }
+
+    fun getUpdateUrl(context: Context): String =
+        sp(context).getString(KEY_UPDATE_URL, "") ?: ""
+
+    /** 启动时静默检查一次更新。默认开，嫌烦可以关。 */
+    fun saveAutoUpdate(context: Context, enabled: Boolean) {
+        sp(context).edit().putBoolean(KEY_AUTO_UPDATE, enabled).apply()
+    }
+
+    fun getAutoUpdate(context: Context): Boolean = sp(context).getBoolean(KEY_AUTO_UPDATE, true)
+
+    /** 用户点了「这次先不更新」的版本号，同一个版本不再反复弹窗。 */
+    fun saveSkippedUpdate(context: Context, versionCode: Int) {
+        sp(context).edit().putInt(KEY_SKIP_UPDATE, versionCode).apply()
+    }
+
+    fun getSkippedUpdate(context: Context): Int = sp(context).getInt(KEY_SKIP_UPDATE, -1)
 
     /**
      * 低频且关键的配置（选过的文件夹、播放模式）用 commit 同步落盘：

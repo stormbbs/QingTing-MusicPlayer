@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
@@ -83,6 +85,7 @@ import com.tom.musicplayer.model.LyricSource
 import com.tom.musicplayer.model.Lyrics
 import com.tom.musicplayer.model.Song
 import com.tom.musicplayer.player.PlayMode
+import com.tom.musicplayer.player.NotificationActions
 import com.tom.musicplayer.player.PlayerController
 import com.tom.musicplayer.ui.components.AlbumArt
 import com.tom.musicplayer.ui.components.LyricsView
@@ -104,7 +107,12 @@ fun PlayerScreen(
     onPrevious: () -> Unit,
     onSelectMode: (PlayMode) -> Unit,
     onToggleFavorite: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 当前这首能不能下载 / 下到哪一步了。本地歌为 null，界面上就不出现下载键。 */
+    downloadState: NotificationActions.DownloadState? = null,
+    /** 下载进度 0..100，未知大小时为 -1。 */
+    downloadProgress: Int = -1,
+    onDownload: () -> Unit = {}
 ) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
@@ -180,9 +188,18 @@ fun PlayerScreen(
                 IconButton(onClick = onToggleFavorite) {
                     Icon(
                         imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = if (isFavorite) "取消收藏" else "收藏这首歌",
+                        contentDescription = if (isFavorite) "取消点心" else "点心这首歌",
                         tint = if (isFavorite) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // 下载放在收藏旁边：有些歌是听了一会儿才决定要留下的，
+                // 不用退回列表、也不用去「我的下载」页再找一遍
+                if (downloadState != null) {
+                    DownloadAction(
+                        state = downloadState,
+                        progress = downloadProgress,
+                        onClick = onDownload
                     )
                 }
                 Box {
@@ -413,9 +430,56 @@ fun PlayerScreen(
     }
 }
 
+/**
+ * 播放页标题栏上的下载键，三种样子：
+ * - 能下：空心箭头；正在下：绕圈的进度环；下过了：勾，颜色提亮表示可以在「我的下载」里找到。
+ *
+ * 尺寸固定 48dp（IconButton 默认触摸区域），换状态时标题栏不会跟着抖。
+ */
 @Composable
-private fun PlayModeRow(mode: PlayMode, onSelect: (PlayMode) -> Unit) {
-    Row(
+private fun DownloadAction(
+    state: NotificationActions.DownloadState,
+    progress: Int,
+    onClick: () -> Unit
+) {
+    when (state) {
+        NotificationActions.DownloadState.BUSY -> Box(
+            modifier = Modifier.size(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (progress in 0..100) {
+                CircularProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.5.dp
+                )
+            } else {
+                // 服务器没给总大小，只能转圈
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.5.dp
+                )
+            }
+        }
+        NotificationActions.DownloadState.DONE -> IconButton(onClick = onClick) {
+            Icon(
+                Icons.Default.DownloadDone,
+                contentDescription = "已下载",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+        NotificationActions.DownloadState.READY -> IconButton(onClick = onClick) {
+            Icon(
+                Icons.Default.Download,
+                contentDescription = "下载这首歌",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayModeRow(mode: PlayMode, onSelect: (PlayMode) -> Unit) {    Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {

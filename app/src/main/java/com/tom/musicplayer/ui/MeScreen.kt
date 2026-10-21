@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.online.DownloadStore
 import com.tom.musicplayer.data.online.Downloader
@@ -53,6 +55,7 @@ import com.tom.musicplayer.util.CrashLogger
 @Composable
 fun MeScreen(
     onOpenDownloads: () -> Unit,
+    onOpenFavorites: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onOpenSources: () -> Unit,
     modifier: Modifier = Modifier
@@ -65,6 +68,8 @@ fun MeScreen(
     var quality by remember { mutableStateOf(Prefs.getQuality(context)) }
     // 清完缓存要让「占用多少」重新算一遍，所以用版本号带着它重算
     val cacheText = remember(version) { formatMB(PlayerDataSources.cachedBytes(context)) }
+    // 点心数直接跟着收藏走：在播放页点了心，回到这里数字就是新的
+    val favorites by PlayerController.favorites.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = modifier,
@@ -90,6 +95,15 @@ fun MeScreen(
                 title = "我的下载",
                 subtitle = if (downloadCount > 0) "$downloadCount 首" else "还没有下载",
                 onClick = onOpenDownloads
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            // 点心本身就是一份歌单，单独给个入口：想听收藏的歌不用先翻「我的歌单」
+            EntryCard(
+                icon = { Icon(Icons.Default.Favorite, contentDescription = null) },
+                title = "我点心的歌曲",
+                subtitle = if (favorites.isEmpty()) "点过心的歌会自动进来"
+                else "${favorites.size} 首 · 在线和本地都在这里",
+                onClick = onOpenFavorites
             )
             Spacer(modifier = Modifier.height(10.dp))
             EntryCard(
@@ -265,6 +279,13 @@ fun MeScreen(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(22.dp))
+            SectionTitle("关于与更新")
+            Spacer(modifier = Modifier.height(8.dp))
+            // 应用内升级：新版本直接覆盖安装，不用卸载 —— 卸载会把下载记录、
+            // 收藏、歌单、音源配置一起清掉，代价太大
+            UpdateSection()
 
             Spacer(modifier = Modifier.height(24.dp))
         }

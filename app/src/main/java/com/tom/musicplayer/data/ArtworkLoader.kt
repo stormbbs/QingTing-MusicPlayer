@@ -82,7 +82,7 @@ object ArtworkLoader {
     fun coverUri(context: Context, audioUri: Uri, targetPx: Int = 512): Uri? {
         val file = coverFile(context, audioUri, targetPx) ?: return null
         return runCatching {
-            FileProvider.getUriForFile(context, "${context.packageName}.artwork", file)
+            FileProvider.getUriForFile(context, "${context.packageName}.files", file)
         }.getOrNull()
     }
 

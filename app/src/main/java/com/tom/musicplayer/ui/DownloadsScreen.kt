@@ -25,6 +25,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
@@ -53,12 +55,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tom.musicplayer.data.FavoritesStore
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.online.DownloadStore
 import com.tom.musicplayer.data.online.Downloader
 import com.tom.musicplayer.model.Song
+import com.tom.musicplayer.player.PlayerController
 import com.tom.musicplayer.util.formatDuration
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 我的下载。
@@ -86,6 +93,8 @@ fun DownloadsScreen(
     var exporting by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var scanning by remember { mutableStateOf(false) }
+    // 下载页也要能点心：一首歌下下来了，顺手就能收进「我点心的歌曲」
+    val favorites by PlayerController.favorites.collectAsStateWithLifecycle()
 
     // 重装 App 后下载记录会跟着数据一起被清掉，但歌还在 Music/轻听 里。
     // 重新列出来需要读音频的权限，所以放到用户主动点按钮时才申请。
@@ -326,6 +335,26 @@ fun DownloadsScreen(
                                     text = formatDuration(item.durationMs),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            val favKey = FavoritesStore.keyOf(item.sourceId, item.songId, item.id)
+                            val fav = favKey in favorites
+                            IconButton(onClick = {
+                                scope.launch {
+                                    // 收藏按规范 key 记账，所以这里得先把记录还原成一首歌；
+                                    // 文件已经不在了就别收，否则歌单里会多一条点不开的
+                                    val song = withContext(Dispatchers.IO) {
+                                        DownloadStore.toSong(context, item)
+                                    }
+                                    if (song != null) PlayerController.toggleFavorite(song)
+                                    else message = "文件已经不在原处了，没法点心"
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                    contentDescription = if (fav) "取消点心" else "点心",
+                                    tint = if (fav) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             IconButton(onClick = {

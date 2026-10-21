@@ -2,6 +2,9 @@
 <resources>
     <string name="app_name">轻听</string>
     <!-- 通知栏自定义按钮的名字：屏幕阅读器与部分车机/穿戴设备会念出来 -->
-    <string name="cmd_favorite">收藏</string>
-    <string name="cmd_unfavorite">取消收藏</string>
+    <string name="cmd_favorite">点心</string>
+    <string name="cmd_unfavorite">取消点心</string>
+    <string name="cmd_download">下载这首歌</string>
+    <string name="cmd_downloading">正在下载</string>
+    <string name="cmd_downloaded">已下载</string>
 </resources>

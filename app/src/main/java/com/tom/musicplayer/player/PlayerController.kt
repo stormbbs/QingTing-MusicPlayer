@@ -23,10 +23,12 @@ import com.tom.musicplayer.data.FavoritesStore
 import com.tom.musicplayer.data.LibraryCache
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.ResumeStore
+import com.tom.musicplayer.data.online.Downloader
 import com.tom.musicplayer.model.PlaybackProgress
 import com.tom.musicplayer.model.SleepMode
 import com.tom.musicplayer.model.SleepState
 import com.tom.musicplayer.model.Song
+import com.tom.musicplayer.model.SourceKind
 import com.tom.musicplayer.ui.theme.DynamicSeed
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +38,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -106,6 +110,8 @@ object PlayerController {
     private var artworkJob: Job? = null
     private var sleepJob: Job? = null
     private var restoreJob: Job? = null
+    /** 盯着下载状态，好在通知栏按钮上把「下载」换成「已下载」。 */
+    private var downloadWatcher: Job? = null
     private var artworkId: String? = null
     /** 上一次落盘的「是否在播放」，用来避免重复写盘。 */
     private var persistedPlaying: Boolean? = null
@@ -169,6 +175,25 @@ object PlayerController {
         pushPlayingState()
         refreshArtwork()
         syncFavorites(app)
+
+        // 「已下载」集合要读一次磁盘（首次），放后台；读完顺手把通知栏按钮刷新一次，
+        // 否则重启后明明下过的歌，通知栏还摆着一个「下载」图标
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { Downloader.refreshDownloadedKeys(app) } }
+            pushActionLayout()
+        }
+
+        // 下载开始 / 结束 / 失败时，通知栏那个按钮要跟着换样子（下载 → 已下载）。
+        // 只订阅「正在下载的 key 集合」的变化，不用进度百分比 —— 否则一次下载要重推上百次布局。
+        downloadWatcher?.cancel()
+        downloadWatcher = scope.launch {
+            Downloader.tasks
+                .map { list ->
+                    list.filter { !it.done && it.error == null }.map { it.key }.toSet()
+                }
+                .distinctUntilChanged()
+                .collect { pushActionLayout() }
+        }
 
         // 两条后台循环都只在「真的需要」时才干活：
         // 暂停或没人在看界面时继续空转，只会白白消耗 CPU，增加息屏听歌时被系统回收的概率。
@@ -316,8 +341,10 @@ object PlayerController {
         pushPlayingState()
         saveProgress()
         refreshArtwork()
-        // 远端曲目来自一次列目录，代价不低；落盘后重启也能直接回到这个列表
-        if (songs.any { it.isRemote }) {
+        // 远端曲目来自一次列目录，代价不低；落盘后重启也能直接回到这个列表。
+        // 只认「整份都是 WebDAV」的列表：这个缓存是本地曲库的画像，
+        // 让在线歌或点心歌单写进去，下次启动曲库就会被它们顶掉
+        if (songs.isNotEmpty() && songs.all { it.kind == SourceKind.WEBDAV }) {
             scope.launch(Dispatchers.IO) {
                 runCatching { LibraryCache.save(app, songs) }
             }
@@ -443,11 +470,11 @@ object PlayerController {
 
     // ------------------------------------------------------------------ 收藏
 
-    /** 服务建好 MediaSession 后登记进来，之后才能把收藏按钮下发到通知栏。 */
+    /** 服务建好 MediaSession 后登记进来，之后才能把按钮下发到通知栏。 */
     fun attachSession(session: MediaSession?) {
         ensureMainThread()
         sessionRef = session
-        pushFavoriteLayout()
+        pushActionLayout()
     }
 
     /** 从磁盘重读一次收藏列表：界面启动时、或收藏可能被别处改过时用。 */
@@ -464,10 +491,10 @@ object PlayerController {
     }
 
     /** 收藏 / 取消收藏指定曲目。切歌或通知栏点击后，UI 与通知按钮都会同步刷新。 */
-    fun toggleFavorite(songId: String) {
+    fun toggleFavorite(song: Song) {
         val app = appContext ?: return
         scope.launch {
-            withContext(Dispatchers.IO) { runCatching { FavoritesStore.toggle(app, songId) } }
+            withContext(Dispatchers.IO) { runCatching { FavoritesStore.toggle(app, song) } }
             _favorites.value = withContext(Dispatchers.IO) {
                 runCatching { FavoritesStore.all(app) }.getOrDefault(emptySet())
             }
@@ -478,33 +505,88 @@ object PlayerController {
     /** 通知栏按钮走这里：收藏「正在播放的那一首」，返回切换后的收藏状态。 */
     fun toggleFavoriteCurrent(): Boolean {
         ensureMainThread()
-        val id = currentFavoriteId() ?: return false
-        val added = id !in _favorites.value
-        toggleFavorite(id)
+        val song = currentPlayingSong() ?: return false
+        val added = !isFavorite(song)
+        toggleFavorite(song)
         return added
     }
 
-    fun isFavorite(songId: String): Boolean = songId in _favorites.value
+    /**
+     * 一次取消多条点心。
+     *
+     * 歌单里的一行可能是两条记录合并出来的（同一份文件在下载页和曲库各点心过一次），
+     * 逐条 [toggleFavorite] 会把第二条当成「再加一次」，所以这里直接按 key 删。
+     */
+    fun removeFavorites(keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        val app = appContext ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { FavoritesStore.remove(app, keys) } }
+            _favorites.value = withContext(Dispatchers.IO) {
+                runCatching { FavoritesStore.all(app) }.getOrDefault(emptySet())
+            }
+            pushFavoriteLayout()
+        }
+    }
+
+    /** 心形图标亮不亮。按 [FavoritesStore.keyOf] 判定，下载版和在线版算同一首。 */
+    fun isFavorite(song: Song): Boolean = FavoritesStore.keyOf(song) in _favorites.value
+
+    fun isFavoriteKey(key: String): Boolean = key in _favorites.value
 
     /** 正在播放的那一首的 id（队列优先，队列还没建好时退回列表下标）。 */
     private fun currentFavoriteId(): String? =
         queueIds.getOrNull(playerRef?.currentMediaItemIndex ?: -1) ?: currentSong?.id
 
     /**
-     * 把「收藏 / 取消收藏」下发给通知栏。
-     * 图标跟着当前曲目的收藏状态走，所以切歌时必须重新推一次，
-     * 否则会看到「上一首是实心心形，切歌后明明没收藏却还是实心」。
+     * 把「收藏 / 下载」两个按钮下发给通知栏。
+     *
+     * 图标跟着当前曲目的状态走，所以切歌、收藏变化、下载状态变化时都要重推一次，
+     * 否则会看到「上一首是实心心形，切歌后明明没收藏却还是实心」这种错位。
+     * 本地歌没有「下载」的概念，此时只下发收藏一个按钮。
      */
-    internal fun pushFavoriteLayout() {
+    internal fun pushActionLayout() {
         val session = sessionRef ?: return
-        val favorite = currentFavoriteId()?.let { it in _favorites.value } ?: false
-        val button = CommandButton.Builder()
-            .setSessionCommand(MediaCommands.toggleFavorite())
-            .setIconResId(if (favorite) R.drawable.ic_favorite_filled else R.drawable.ic_favorite_border)
-            .setDisplayName(if (favorite) "取消收藏" else "收藏")
-            .setEnabled(true)
-            .build()
-        runCatching { session.setCustomLayout(listOf(button)) }
+        val song = currentPlayingSong()
+        val favorite = song?.let { isFavorite(it) } ?: false
+        val buttons = ArrayList<CommandButton>(2)
+        buttons.add(NotificationActions.favorite(favorite))
+        NotificationActions.downloadStateOf(song)?.let {
+            buttons.add(NotificationActions.download(it))
+        }
+        runCatching { session.setCustomLayout(buttons) }
+    }
+
+    /** 兼容旧调用点：只刷新收藏图标时也用得到。 */
+    internal fun pushFavoriteLayout() = pushActionLayout()
+
+    /**
+     * 当前正在播放的那一首的完整信息。
+     *
+     * 优先按播放器的 mediaId 去队列里找：用户拖动进度条、切歌瞬间，
+     * [_currentIndex] 有几十毫秒是滞后的，按 id 找才拿得到正在响的那首。
+     */
+    private fun currentPlayingSong(): Song? {
+        val id = currentFavoriteId() ?: return currentSong
+        return _songs.value.firstOrNull { it.id == id } ?: currentSong
+    }
+
+    /**
+     * 通知栏点「下载」：把正在播的这首下下来。
+     *
+     * 这个入口完全没有界面 —— 用户可能在锁屏或车机上点的，
+     * 所以下载任务必须由 [Downloader] 自己在后台跑完，不依赖任何协程作用域。
+     *
+     * @return 真的开始了下载返回 true
+     */
+    fun downloadCurrent(): Boolean {
+        ensureMainThread()
+        val app = appContext ?: return false
+        val song = currentPlayingSong() ?: return false
+        val started = Downloader.downloadFromSong(app, song)
+        // 立刻刷一次：按钮马上变成「正在下载」，用户点了有反应
+        if (started) pushActionLayout()
+        return started
     }
 
     fun seekTo(positionMs: Long) {

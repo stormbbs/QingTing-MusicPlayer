@@ -199,7 +199,11 @@ object DownloadStore {
             durationMs = d.durationMs,
             fileName = name,
             kind = SourceKind.LOCAL,
-            sizeBytes = d.sizeBytes
+            sizeBytes = d.sizeBytes,
+            // 音源身份要带着走：点心（收藏）按「音源:歌曲」记账，
+            // 这样一首在线歌和它下载下来的那份算同一首
+            onlineSourceId = d.sourceId,
+            onlineSongId = d.songId
         )
     }
 }

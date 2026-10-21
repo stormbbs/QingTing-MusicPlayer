@@ -11,6 +11,7 @@ import androidx.documentfile.provider.DocumentFile
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.UriGrant
 import com.tom.musicplayer.model.OnlineSong
+import com.tom.musicplayer.model.toOnlineSong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -67,12 +69,63 @@ object Downloader {
     )
     val saved: SharedFlow<Unit> = _saved.asSharedFlow()
 
+    /**
+     * 已下载歌曲的 key 集合（`sourceId:songId`）。
+     *
+     * 播放页和通知栏要靠它决定按钮长什么样：没下过 → 显示下载图标，
+     * 已经下过 → 显示「已下载」，正在下 → 显示进度。
+     * 只在增删改之后刷新一次，不在每次重组时读文件。
+     */
+    private val _downloadedKeys = MutableStateFlow<Set<String>>(emptySet())
+    val downloadedKeys: StateFlow<Set<String>> = _downloadedKeys
+
+    /** 下载是「点一下就撒手」的动作，界面不等它返回，所以自带一个后台作用域。 */
+    private val scope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+    )
+
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
     fun taskKey(song: OnlineSong) = "${song.sourceId}:${song.songId}"
+
+    /** 同一套 key 规则，给「从 Song 反查下载状态」用。 */
+    fun taskKey(sourceId: String?, songId: String?): String? {
+        if (sourceId.isNullOrBlank() || songId.isNullOrBlank()) return null
+        return "$sourceId:$songId"
+    }
+
+    /** 重算「已下载」集合。增删改之后调一次，界面靠这个流刷新。 */
+    fun refreshDownloadedKeys(context: Context) {
+        _downloadedKeys.value = DownloadStore.load(context)
+            .mapNotNull { taskKey(it.sourceId, it.songId) }
+            .toHashSet()
+    }
+
+    fun isDownloading(song: OnlineSong): Boolean = _tasks.value.any {
+        it.key == taskKey(song) && !it.done && it.error == null
+    }
+
+    /**
+     * 播放页 / 通知栏点「下载」时走这里：传进来的是正在播的那首歌。
+     *
+     * 不由调用方 `scope.launch` 是因为通知栏那个入口根本没有界面作用域，
+     * 用户点了按钮就退回桌面也是常有的事，下载必须自己活着。
+     *
+     * @return 已经开始下载返回 true；不是在线歌、或已经在下了返回 false
+     */
+    fun downloadFromSong(context: Context, song: com.tom.musicplayer.model.Song): Boolean {
+        val online = song.toOnlineSong() ?: return false
+        if (isDownloading(online)) return false
+        // 同一个 key 已有完成/失败记录时先清掉，界面上才能重新画进度
+        _tasks.value = _tasks.value.filterNot { it.key == taskKey(online) && (it.done || it.error != null) }
+        val app = context.applicationContext
+        val quality = Prefs.getQuality(app)
+        scope.launch { runCatching { download(app, online, quality) } }
+        return true
+    }
 
     private fun upsert(task: DownloadTask) {
         _tasks.value = _tasks.value.filterNot { it.key == task.key } + task
@@ -133,6 +186,8 @@ object Downloader {
                     finishedAt = System.currentTimeMillis()
                 )
                 DownloadStore.add(context, record)
+                // 播放页/通知栏的按钮要靠这个集合切成「已下载」
+                refreshDownloadedKeys(context)
 
                 upsert(DownloadTask(key, song.name, song.artist, 100, done = true))
                 notify.done(song.name)
@@ -397,6 +452,7 @@ object Downloader {
         // 旧版私有目录里的残留也顺手清掉
         item.legacyPath?.let { runCatching { File(context.filesDir, it).delete() } }
         if (ok) DownloadStore.remove(context, item.id)
+        if (ok) refreshDownloadedKeys(context)
         return ok
     }
 
@@ -475,6 +531,7 @@ object Downloader {
             }
         }
         DownloadStore.replaceAll(context, kept)
+        refreshDownloadedKeys(context)
         // 空目录顺手删掉，免得看着像还有东西
         runCatching {
             val dir = File(context.filesDir, LEGACY_DIR)
@@ -578,7 +635,10 @@ object Downloader {
             )
             added++
         }
-        if (added > 0) DownloadStore.replaceAll(context, list)
+        if (added > 0) {
+            DownloadStore.replaceAll(context, list)
+            refreshDownloadedKeys(context)
+        }
         added
     }
 

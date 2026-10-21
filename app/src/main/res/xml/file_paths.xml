@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
+    <!-- 封面缩略图：导出到 filesDir/artwork 后交给通知栏 / 锁屏 / 车机去读 -->
     <files-path
         name="artwork"
         path="artwork/" />
+    <!-- 升级安装包：只暴露 cacheDir 下的 updates 目录，
+         系统安装器通过这个 URI 读到 APK 后就能覆盖安装 -->
+    <cache-path
+        name="updates"
+        path="updates/" />
 </paths>

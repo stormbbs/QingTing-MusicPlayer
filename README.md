@@ -5,7 +5,7 @@
 它最初只是想解决一件小事：手机里存的歌用系统播放器翻着太累，就想打开 App 直接听，还能顺手挑挑播放模式。后来一步步加成了现在这样：本地扫歌、WebDAV 网络音源、滚动歌词、封面取色主题、离线缓存、睡眠定时、断点续听、一键收藏。
 
 - 包名：`com.tom.musicplayer`
-- 当前版本：`versionCode 4` / `versionName 1.3-1020`
+- 当前版本：`versionCode 9` / `versionName 1.8-1021`
 - 支持 Android 8.0（API 26）及以上
 
 ## 功能清单
@@ -16,7 +16,7 @@
 | 本地曲库 | 用系统文件选择器授权一个文件夹，自动扫描 mp3 / wav / flac；二次启动走磁盘缓存 + 增量扫描，冷启动不会整库重解标签 |
 | 播放模式 | 顺序 / 倒序 / 随机 / 单曲循环，菜单选完入口文案会跟着变 |
 | 前台服务 | `MediaSessionService` + `START_STICKY`，熄屏、切后台继续播 |
-| 通知栏控制 | 上一首 / 播放暂停 / 下一首 / 收藏，带专辑封面 |
+| 通知栏控制 | 上一首 / 播放暂停 / 下一首 / 收藏 / 下载，带专辑封面 |
 | 断点续听 | 每首歌独立记进度，下次进来接着播 |
 | 睡眠定时 | 可选时长，到点自动停并淡停音频焦点 |
 
@@ -118,9 +118,22 @@ node bridge.js 18093
 - **封面取色**：用 Palette 从专辑封面抽主色，驱动整个播放页的 Material 配色，每首歌都有自己的颜色。
 - **搜索 / 收藏**：按歌名、歌手过滤；收藏写 `favorites.json`，列表页实时显示「我的喜欢 N」。
 
-### 一键收藏
-播放页标题栏右上角和通知栏面板各有一颗心，点一下就收藏当前正在播的那一首，不需要回列表里找。
-两边共用同一份 `StateFlow<Set<String>>`，任一侧点击后另一侧图标、列表计数、收藏视图都会同步；切歌时图标自动换成新曲目的状态。
+### 点心 / 下载
+播放页标题栏右上角、以及通知栏面板，都有「点心」和「下载」两颗按钮，中间隔一个位置，拇指都够得着：
+
+- **点心**（就是收藏，图标是心形）：点一下收下当前正在播的那一首，不需要回列表里找。两边共用同一份 `StateFlow<Set<String>>`，任一侧点击后另一侧图标、列表计数都会同步；切歌时图标自动换成新曲目的状态。
+- **下载**：有些歌是听了一会儿才决定要留下的，点一下直接下到当前设置的下载目录。按钮有三态——空心箭头（能下）→ 进度环（正在下，带百分比）→ 勾（已下载）。本地 / WebDAV 的歌本来就在手上，这一个按钮不出现。
+
+通知栏那一路是独立的：命令从 `MediaSession` 回来，下载任务自带后台作用域，所以锁屏点、车机上点、点完直接退回桌面，都能下完。
+
+### 我点心的歌曲（自动歌单）
+点过心的歌会自动进「我的歌单 → 我点心的歌曲」，不用先建歌单再往里塞。入口有两个：「我的」页的「我点心的歌曲」，以及「我的歌单」列表固定的第一条。
+
+- 在线的、已经下载的、本地文件夹里的，点一下心都收进同一份歌单。
+- 点心的动作到处都有：播放页、通知栏/锁屏、曲库列表、在线搜索结果、我的下载。哪里顺手点哪里。
+- 这份歌单不是副本：它就是收藏本身。在里面取消心形，歌立刻从歌单消失，反之亦然。
+- 收藏只记「身份 + 展示信息」，不记播放直链（直链有时效）。所以点开时会先解析一遍：下过的优先用本地文件，本地文件被挪走了会去曲库里按文件名再找一次，实在找不到才标成「文件已不在原处」，不会点了没反应。
+- 同一首歌的「在线版」和「下载版」算一首：按 `音源:歌曲` 判定，不会出现两条重复，取消一条也不会留下另一条。
 
 ## 编译
 
@@ -134,21 +147,58 @@ node bridge.js 18093
 > 如果在国内网络环境下 Gradle 拉不动依赖，给它显式挂代理：
 > `GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=<端口> -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=<端口>"`
 
+## 应用内升级
+
+侧载分发没有应用商店，但也不该让人每次卸载重装 —— 卸载会把下载记录、收藏、歌单、音源配置一起清掉。所以做了应用内升级：**下载新版本 APK → 交给系统安装器覆盖安装**，数据全保留。
+
+- 入口：`我的 → 关于与更新`。可以手动检查、开关「启动时自动检查」、改更新源、或者直接从文件管理器选一个本地 APK 安装。
+- 检查方式：读一份 JSON 清单，`versionCode` 比当前大才算有新版本。
+
+```json
+{
+  "versionCode": 8,
+  "versionName": "1.7-1021",
+  "url": "https://example.com/qingting-1.7-1021.apk",
+  "mirrorUrl": "",
+  "size": 21133779,
+  "sha256": "……",
+  "notes": "更新说明，\n 可以换行",
+  "mandatory": false
+}
+```
+
+- 默认清单地址是仓库根目录的 `latest.json`（先试 jsDelivr，再试 GitHub raw）。想放自己服务器，在「更新源」里填完整 URL 即可。
+- `size` / `sha256` 填了就校验，下坏了会明确报错而不是装上去崩。
+
+发布一个新版本：
+
+```bash
+python tools/publish_update.py --build                  # 打包 + 生成 dist/latest.json
+python tools/publish_update.py --build --url https://你的地址/qingting-1.7-1021.apk
+python tools/publish_update.py --build --serve          # 同一 Wi-Fi 下手机直接用，连外网都不用
+```
+
+把 `dist/latest.json` 里的内容同步到仓库根目录的 `latest.json`，再把 `dist/qingting-*.apk` 放到清单 `url` 指向的位置（GitHub Release 附件 / 自己的服务器都行）。
+
+> 覆盖安装要求签名一致。一直用同一台机器、同一个 `debug.keystore` 打包就没问题；换了签名只能卸载重装一次。
+
 ## 目录结构
 
 ```
 app/src/main/java/com/tom/musicplayer/
 ├── player/
 │   ├── PlaybackService.kt     MediaSessionService：后台播放、通知栏、自定义命令回调
+│   ├── NotificationActions.kt 通知栏自定义按钮（收藏 / 下载）的统一构建处
 │   ├── PlayerController.kt    全局播放状态中枢（StateFlow 下发：进度 / 队列 / 模式 / 收藏 / 主色）
 │   ├── PlayerDataSources.kt   本地 ContentResolver + OkHttp + SimpleCache 数据源装配
-│   └── MediaCommands.kt       通知栏自定义命令（收藏）
+│   └── MediaCommands.kt       通知栏自定义命令（收藏 / 下载）
 ├── data/
 │   ├── MusicScanner.kt        增量扫描
-│   ├── FavoritesStore.kt      收藏持久化
+│   ├── FavoritesStore.kt      点心（收藏）：身份 + 展示信息，直接当歌单用
 │   ├── LibraryCache.kt        曲库缓存
 │   ├── Prefs.kt / ResumeStore.kt / SourceStore.kt
 │   ├── lyrics/                LRC 解析 + LRCLIB 搜索
+│   ├── update/                应用内升级：清单解析、APK 下载校验、交给系统安装器
 │   ├── online/                在线音乐：音源、协议客户端、下载器、自建歌单
 │   │   └── builtin/           内置源引擎（酷我 / 网易云）+ 共用直链解析
 │   └── webdav/                WebDAV 客户端与目录扫描

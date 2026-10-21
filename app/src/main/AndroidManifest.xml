@@ -19,10 +19,19 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- 应用内升级：下载到新版本 APK 后交给系统安装器覆盖安装。
+         这条权限本身不会静默装东西，用户还得在「安装未知应用」里单独允许本应用。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <queries>
         <intent>
             <action android:name="android.intent.action.OPEN_DOCUMENT_TREE" />
+        </intent>
+        <!-- Android 11 起看不见别的应用：要先声明「我要找能装 APK 的界面」，
+             才解析得到系统安装器，进而把安装包的读权限精确授予它。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
         </intent>
     </queries>
 
@@ -59,11 +68,17 @@
             </intent-filter>
         </service>
 
-        <!-- 封面缩略图对外提供图片 URI：通知栏/锁屏等系统界面只能读「图片 URI」，
-             音频文件的内嵌封面它们读不到，所以这里把封面导出成图片再授权给对方。 -->
+        <!-- 对外提供文件 URI 的唯一入口，两个用途：
+             1. 封面缩略图：通知栏/锁屏等系统界面只能读「图片 URI」，
+                音频文件的内嵌封面它们读不到，所以把封面导出成图片再授权给对方；
+             2. 升级安装包：系统安装器读 cacheDir/updates 下的 APK。
+             注意：同一个 FileProvider 类只能声明一次。声明两个（不同 authority）
+             会让第二个被复用成第一个的实例，安装时报
+             「The authority ... does not match the one of the contentProvider」。
+             所以这里用一份配置、一个 authority，路径按用途分开。 -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.artwork"
+            android:authorities="${applicationId}.files"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

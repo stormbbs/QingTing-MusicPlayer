@@ -60,7 +60,9 @@ import com.tom.musicplayer.data.MusicScanner
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.UriGrant
 import com.tom.musicplayer.data.online.Downloader
+import com.tom.musicplayer.data.update.UpdateCenter
 import com.tom.musicplayer.model.Song
+import com.tom.musicplayer.player.NotificationActions
 import com.tom.musicplayer.player.PlaybackService
 import com.tom.musicplayer.player.PlayerController
 import com.tom.musicplayer.util.CrashLogger
@@ -87,6 +89,8 @@ fun AppRoot() {
     var rescanJob by remember { mutableStateOf<Job?>(null) }
     // 从「在线」页进音源管理时，返回键要回在线页；从「我的」进则回「我的」
     var returnToOnline by remember { mutableStateOf(false) }
+    // 「我点心的歌曲」有两个入口（我的 / 我的歌单），返回要回到进来的地方
+    var favoritesFromMe by remember { mutableStateOf(false) }
 
     /**
      * 「我的音乐」列表 == 本地曲库，独立于播放队列。
@@ -103,6 +107,9 @@ fun AppRoot() {
     val mode by PlayerController.mode.collectAsStateWithLifecycle()
     // 收藏统一由控制器持有：通知栏点一下收藏，这里（列表计数、播放页心形）立刻跟着变
     val favorites by PlayerController.favorites.collectAsStateWithLifecycle()
+    // 播放页的下载键要实时反映「正在下 / 下过了」，所以这两条流都得订阅
+    val downloadKeys by Downloader.downloadedKeys.collectAsStateWithLifecycle()
+    val downloadTasks by Downloader.tasks.collectAsStateWithLifecycle()
 
     val currentSong = songs.getOrNull(currentIndex)
 
@@ -134,7 +141,11 @@ fun AppRoot() {
                 if (PlayerController.songs.value.none { it.isRemote }) {
                     runCatching { PlayerController.setSongs(context, result) }
                 }
-                withContext(Dispatchers.IO) { LibraryCache.save(context, result) }
+                withContext(Dispatchers.IO) {
+                    LibraryCache.save(context, result)
+                    // 曲库是最全的一份元数据：拿它把收藏里缺歌名 / 缺地址的老记录补上
+                    runCatching { FavoritesStore.enrich(context, result) }
+                }
                 folderUnreadable = false
             } else {
                 // 扫不到但列表里有缓存歌曲：保留旧列表，只提示需要重新授权
@@ -247,6 +258,7 @@ fun AppRoot() {
             )
             AppScreen.ME -> MeScreen(
                 onOpenDownloads = { screen = AppScreen.DOWNLOADS },
+                onOpenFavorites = { favoritesFromMe = true; screen = AppScreen.FAVORITES },
                 onOpenPlaylists = { screen = AppScreen.PLAYLISTS },
                 onOpenSources = {
                     returnToOnline = false
@@ -264,7 +276,19 @@ fun AppRoot() {
                 onPickFolder = { folderPicker.launch(null) }
             )
             AppScreen.PLAYLISTS -> PlaylistsScreen(
+                onOpenFavorites = { favoritesFromMe = false; screen = AppScreen.FAVORITES },
                 onBack = { screen = AppScreen.ME },
+                onPlay = { list, index ->
+                    scope.launch {
+                        withPlayer(context) { PlayerController.playSongs(context, list, index) }
+                    }
+                    showPlayer = true
+                }
+            )
+            // 点心（收藏）就是一份歌单，点开直接能播，不用先转存
+            AppScreen.FAVORITES -> FavoritesScreen(
+                library = library,
+                onBack = { screen = if (favoritesFromMe) AppScreen.ME else AppScreen.PLAYLISTS },
                 onPlay = { list, index ->
                     scope.launch {
                         withPlayer(context) { PlayerController.playSongs(context, list, index) }
@@ -314,7 +338,7 @@ fun AppRoot() {
                         showPlayer = true
                     }
                 },
-                onToggleFavorite = { song -> PlayerController.toggleFavorite(song.id) },
+                onToggleFavorite = { song -> PlayerController.toggleFavorite(song) },
                 favorites = favorites,
                 onTogglePlay = { scope.launch { withPlayer(context) { PlayerController.togglePlay() } } },
                 onSkipNext = { scope.launch { withPlayer(context) { PlayerController.skipNext() } } },
@@ -343,10 +367,20 @@ fun AppRoot() {
         ) {
             val song = currentSong
             if (song != null) {
+                // 正在播的这首的下载状态：本地歌没有下载概念（null），在线歌分三态
+                val dlKey = Downloader.taskKey(song.onlineSourceId, song.onlineSongId)
+                val busyTask = downloadTasks.firstOrNull {
+                    it.key == dlKey && !it.done && it.error == null
+                }
+                val downloadState = if (!song.isOnline || dlKey == null) null else when {
+                    busyTask != null -> NotificationActions.DownloadState.BUSY
+                    dlKey in downloadKeys -> NotificationActions.DownloadState.DONE
+                    else -> NotificationActions.DownloadState.READY
+                }
                 PlayerScreen(
                     song = song,
                     isPlaying = isPlaying,
-                    isFavorite = song.id in favorites,
+                    isFavorite = PlayerController.isFavorite(song),
                     mode = mode,
                     onBack = { showPlayer = false },
                     onTogglePlay = {
@@ -359,7 +393,24 @@ fun AppRoot() {
                     onSelectMode = { target ->
                         scope.launch { withPlayer(context) { PlayerController.setMode(target) } }
                     },
-                    onToggleFavorite = { PlayerController.toggleFavorite(song.id) }
+                    onToggleFavorite = { PlayerController.toggleFavorite(song) },
+                    downloadState = downloadState,
+                    downloadProgress = busyTask?.progress ?: -1,
+                    onDownload = {
+                        when (downloadState) {
+                            NotificationActions.DownloadState.READY -> {
+                                val started = Downloader.downloadFromSong(context, song)
+                                toast(
+                                    context,
+                                    if (started) "开始下载：${song.title}"
+                                    else "这首歌已经在下载了"
+                                )
+                            }
+                            NotificationActions.DownloadState.DONE ->
+                                toast(context, "已经在「我的下载」里了：${song.title}")
+                            else -> Unit
+                        }
+                    }
                 )
             }
         }
@@ -376,11 +427,23 @@ fun AppRoot() {
         )
     }
 
+    // 升级弹窗放在这里，是因为它是全局状态：启动时静默检查到的结果、
+    // 「我的」页手动检查的结果，都从同一个状态流过来，只弹一个框
+    val updateState by UpdateCenter.state.collectAsStateWithLifecycle()
+    when (val s = updateState) {
+        is UpdateCenter.State.Available,
+        is UpdateCenter.State.Downloading,
+        is UpdateCenter.State.Ready,
+        is UpdateCenter.State.NeedPermission,
+        is UpdateCenter.State.Failed -> UpdateDialog(state = s, onDismiss = { UpdateCenter.dismiss() })
+        else -> Unit
+    }
+
     BackHandler(enabled = showPlayer) { showPlayer = false }
 }
 
 private enum class AppScreen {
-    LIBRARY, SOURCES, ONLINE, ME, DOWNLOADS, PLAYLISTS, ONLINE_SOURCES
+    LIBRARY, SOURCES, ONLINE, ME, DOWNLOADS, PLAYLISTS, FAVORITES, ONLINE_SOURCES
 }
 
 /**
@@ -421,8 +484,7 @@ private fun sourceLabel(treeUri: Uri?, songs: List<Song>): String? {
  * 确保播放服务活着再执行控制指令：服务可能被系统回收（暂停/息屏时很常见），
  * 重新拉起后控制器会自动按播放模式恢复队列，按钮因此可以立刻生效。
  */
-private suspend fun withPlayer(context: Context, action: () -> Unit) {
-    var waited = 0L
+private suspend fun withPlayer(context: Context, action: () -> Unit) {    var waited = 0L
     while (PlayerController.player == null && waited < 3000L) {
         runCatching { context.startService(Intent(context, PlaybackService::class.java)) }
         delay(150)
@@ -471,4 +533,16 @@ private fun CrashLogDialog(log: String, onDismiss: () -> Unit) {
             TextButton(onClick = onDismiss) { Text("关闭") }
         }
     )
+}
+
+/**
+ * 一条短暂的操作反馈。
+ *
+ * 下载是「点完就走」的动作，成败都在通知栏里报告；但点了按钮如果界面上一点动静都没有，
+ * 用户会以为没点上，所以这里立刻给一句提示。
+ */
+private fun toast(context: Context, message: String) {
+    runCatching {
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+    }
 }

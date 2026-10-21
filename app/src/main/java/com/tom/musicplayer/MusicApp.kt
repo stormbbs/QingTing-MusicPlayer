@@ -22,6 +22,18 @@ class MusicApp : Application() {
             runCatching { Downloader.migrateLegacy(this@MusicApp) }
             // 卸载重装后私有记录没了，但公共目录里的歌还在，按目录把列表补回来
             runCatching { Downloader.rebuildIndex(this@MusicApp) }
+            // 补完记录再算一次「哪些已经下过」，播放页的下载按钮一开始就是对的
+            runCatching { Downloader.refreshDownloadedKeys(this@MusicApp) }
+            // 老版本的收藏只存了 id，趁这里有曲库缓存和下载记录，把能补的信息补上，
+            // 否则「我点心的歌曲」里那些歌没有歌名、也播不了
+            runCatching {
+                val songs = com.tom.musicplayer.data.LibraryCache.load(this@MusicApp) +
+                    com.tom.musicplayer.data.online.DownloadStore.load(this@MusicApp)
+                        .mapNotNull { com.tom.musicplayer.data.online.DownloadStore.toSong(this@MusicApp, it) }
+                com.tom.musicplayer.data.FavoritesStore.enrich(this@MusicApp, songs)
+            }
+            // 自动检查更新：只在用户开着这个开关时做，失败了也绝不打扰
+            runCatching { com.tom.musicplayer.data.update.UpdateCenter.autoCheck(this@MusicApp) }
         }
     }
 }
