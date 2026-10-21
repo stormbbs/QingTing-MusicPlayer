@@ -111,7 +111,7 @@ fun MeScreen(
             Spacer(modifier = Modifier.height(8.dp))
             Row {
                 ChoiceChip(
-                    text = "App 内（我的下载）",
+                    text = "下载目录",
                     selected = downloadTarget == "app",
                     onClick = {
                         downloadTarget = "app"
@@ -120,7 +120,7 @@ fun MeScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 ChoiceChip(
-                    text = "音乐文件夹",
+                    text = "我的音乐文件夹",
                     selected = downloadTarget == "saf",
                     onClick = {
                         downloadTarget = "saf"
@@ -128,13 +128,22 @@ fun MeScreen(
                     }
                 )
             }
+            // 路径必须写出来：用户要自己去找、或者拷到别的地方，得先知道在哪
+            Text(
+                text = Downloader.targetLocation(context),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 8.dp)
+            )
             Text(
                 text = if (downloadTarget == "app")
-                    "下载的歌只在「我的下载」里，卸载 App 会一起清掉。"
-                else "直接下载到你选的音乐文件夹，下载完会被自动扫描，和本地歌一起听。",
+                    "系统媒体库里的公共目录，卸载 App 不会删歌；任何文件管理器都能找到并复制。" +
+                        "在「我的下载」里可以一键复制到别的文件夹。"
+                else "直接下到你的音乐文件夹（和本地曲库同一个），下载完会立刻出现在「我的音乐」里。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 4.dp)
             )
 
             Spacer(modifier = Modifier.height(22.dp))

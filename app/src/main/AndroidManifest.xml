@@ -12,6 +12,13 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 用于在系统设置里申请「不受电池优化限制」，减少国产 ROM 的后台清理 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 下载的歌放在公共目录 Music/轻听 里。卸载重装后文件还在，但归属权已经不属于
+         这个包了，要重新把它们列出来就看这条权限。只在「我的下载」点「扫描下载目录」时
+         才申请，平时不打扰。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <queries>
         <intent>

@@ -75,6 +75,8 @@ import com.tom.musicplayer.util.formatDuration
 @Composable
 fun LibraryScreen(
     songs: List<Song>,
+    /** 正在播放的那首。可能不在 [songs] 里（比如正在听在线歌），迷你条照样要显示。 */
+    nowPlaying: Song?,
     currentIndex: Int,
     isPlaying: Boolean,
     folderLabel: String?,
@@ -95,8 +97,6 @@ fun LibraryScreen(
     favorites: Set<String>,
     modifier: Modifier = Modifier
 ) {
-    val currentSong = songs.getOrNull(currentIndex)
-
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var favOnly by remember { mutableStateOf(false) }
@@ -137,9 +137,9 @@ fun LibraryScreen(
             )
         },
         bottomBar = {
-            if (currentSong != null) {
+            if (nowPlaying != null) {
                 MiniPlayer(
-                    song = currentSong,
+                    song = nowPlaying,
                     isPlaying = isPlaying,
                     onOpenPlayer = onOpenPlayer,
                     onTogglePlay = onTogglePlay,

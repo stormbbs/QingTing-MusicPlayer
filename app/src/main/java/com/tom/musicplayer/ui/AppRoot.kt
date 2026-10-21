@@ -59,6 +59,7 @@ import com.tom.musicplayer.data.LibraryCache
 import com.tom.musicplayer.data.MusicScanner
 import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.UriGrant
+import com.tom.musicplayer.data.online.Downloader
 import com.tom.musicplayer.model.Song
 import com.tom.musicplayer.player.PlaybackService
 import com.tom.musicplayer.player.PlayerController
@@ -86,6 +87,15 @@ fun AppRoot() {
     var rescanJob by remember { mutableStateOf<Job?>(null) }
     // 从「在线」页进音源管理时，返回键要回在线页；从「我的」进则回「我的」
     var returnToOnline by remember { mutableStateOf(false) }
+
+    /**
+     * 「我的音乐」列表 == 本地曲库，独立于播放队列。
+     *
+     * 以前这里直接把播放队列当成曲库显示，结果从在线页播一首歌、或者从「我的下载」
+     * 里放着刚下的一首，整个本地曲库视图就被那一首歌顶掉了 —— 用户看到的是
+     * 「文件夹里其他歌都不见了，重新扫描才回来」。列表跟队列分开，就不会再互相污染。
+     */
+    var library by remember { mutableStateOf<List<Song>>(emptyList()) }
 
     val songs by PlayerController.songs.collectAsStateWithLifecycle()
     val currentIndex by PlayerController.currentIndex.collectAsStateWithLifecycle()
@@ -118,11 +128,13 @@ fun AppRoot() {
 
             if (result.isNotEmpty()) {
                 UriGrant.take(context, uri)
-                // 用户正在听网络曲库时，别让本地扫描结果把远端列表顶掉
+                // 曲库列表先更新，它只反映「文件夹里有什么」，与正在播什么无关
+                library = result
+                // 用户正在听网络曲库时，别让本地扫描结果把远端播放队列顶掉
                 if (PlayerController.songs.value.none { it.isRemote }) {
                     runCatching { PlayerController.setSongs(context, result) }
-                    withContext(Dispatchers.IO) { LibraryCache.save(context, result) }
                 }
+                withContext(Dispatchers.IO) { LibraryCache.save(context, result) }
                 folderUnreadable = false
             } else {
                 // 扫不到但列表里有缓存歌曲：保留旧列表，只提示需要重新授权
@@ -179,8 +191,11 @@ fun AppRoot() {
 
         // 1) 先用磁盘缓存把列表立刻顶起来，防止重启瞬间显示空白 + 要求重选文件夹
         val cached = withContext(Dispatchers.IO) { LibraryCache.load(context) }
-        if (cached.isNotEmpty() && PlayerController.songs.value.isEmpty()) {
-            runCatching { PlayerController.setSongs(context, cached) }
+        if (cached.isNotEmpty()) {
+            library = cached
+            if (PlayerController.songs.value.isEmpty()) {
+                runCatching { PlayerController.setSongs(context, cached) }
+            }
         }
 
         // 2) 找回上次选择的文件夹：Prefs 优先，系统仍留着的持久化授权兜底
@@ -191,6 +206,15 @@ fun AppRoot() {
         treeUri = stored
         // 把已解析好的元数据传给扫描器：只有新歌才需要真正打开文件
         if (stored != null) rescan(stored, cached)
+    }
+
+    // 下载完自动刷一次曲库：下到音乐文件夹里的歌该马上出现，
+    // 而不是等用户下次重启、或者自己去重新选一遍文件夹
+    LaunchedEffect(Unit) {
+        Downloader.saved.collect {
+            val uri = Prefs.getTreeUri(context) ?: return@collect
+            if (Prefs.getDownloadTarget(context) == "saf") rescan(uri, library)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -252,10 +276,14 @@ fun AppRoot() {
                 onBack = { screen = if (returnToOnline) AppScreen.ONLINE else AppScreen.ME }
             )
             AppScreen.LIBRARY -> LibraryScreen(
-                songs = songs,
-                currentIndex = currentIndex,
+                songs = library,
+                nowPlaying = currentSong,
+                // 高亮按曲目 id 找：队列现在可能和曲库不是同一份
+                currentIndex = currentSong?.let { cur ->
+                    library.indexOfFirst { it.id == cur.id }
+                } ?: -1,
                 isPlaying = isPlaying,
-                folderLabel = sourceLabel(treeUri, songs),
+                folderLabel = sourceLabel(treeUri, library),
                 scanning = scanning,
                 hasFolder = hasFolder,
                 folderUnreadable = folderUnreadable,
@@ -263,8 +291,19 @@ fun AppRoot() {
                 onPickFolder = { folderPicker.launch(null) },
                 onOpenSources = { screen = AppScreen.SOURCES },
                 onSongClick = { index ->
+                    val songList = library
                     scope.launch {
-                        withPlayer(context) { PlayerController.playSong(index) }
+                        withPlayer(context) {
+                            // 队列就是曲库时按原逻辑走（能记住上次听到哪），
+                            // 否则才整体换成曲库 —— 这样从在线/下载页播完歌回来，
+                            // 曲库不会被一首歌顶掉
+                            val queueIds = PlayerController.songs.value.map { it.id }
+                            if (queueIds == songList.map { it.id }) {
+                                PlayerController.playSong(index)
+                            } else {
+                                PlayerController.playSongs(context, songList, index)
+                            }
+                        }
                         showPlayer = true
                     }
                 },
