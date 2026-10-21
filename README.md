@@ -62,25 +62,47 @@ App 侧一行代码都不用改——两边的能力本来是同构的（`search
 实测过的链路（bilibili 插件，端到端跑在模拟器上）：搜到 8 条 → 点第一首 → 播放状态进入
 PLAYING → 进度从 3.0s 走到 9.8s → 榜单列表出 7 条 → 无崩溃。
 
-### 接国内平台：`tools/lx_bridge`
+### 内置音源：酷我 / 网易云（开箱即用）
 
-MusicFree 官方仓库已经把国内平台插件下架了，剩下的 bilibili 返回的是合集视频而不是单曲。
-想要正常的华语曲库，用 `tools/lx_bridge`：
+App 里直接内置了两个国内平台的引擎，装好就能搜，不用再架任何服务：
+
+| 源 | 搜索 | 榜单 | 歌词 | 封面 | 播放 |
+| --- | --- | --- | --- | --- | --- |
+| 酷我音乐 | ✅ | ✅ 30+ 个榜 | ✅ | ✅ | ✅ |
+| 网易云音乐 | ✅ | ✅ 4 个官方榜 | ✅ | ✅ | ✅ |
+
+**播放需要一把密钥**（解析直链用）。两种填法：
+
+1. **App 里填一次**：「我的 → 在线音源 → 某个源 → 设置 → 音源密钥」，存在本地，之后一直用。
+2. **构建时注入**（省得手动填）：在 `local.properties` 里加一行
+
+```properties
+LINGLAN_KEY=CERU_KEY-你的密钥
+```
+
+`local.properties` 已被 `.gitignore` 忽略，密钥不会进仓库；别人 clone 下来是空的，得自己填。
+没填密钥时搜索、榜单、歌词都正常，只是点播放会提示缺密钥。
+
+音源管理里可以随时启停单个源、改名、换密钥、删除（想恢复从「+ → 内置平台」加回来）。
+也可以继续用「+ → 自定义协议音源」接入任何第三方服务——内置源和自定义源是并列的，
+可以同时启用，搜索结果按来源交错合并。
+
+> 实现说明：内置引擎只负责**元数据**（搜索 / 榜单 / 歌词 / 封面），播放直链统一交给
+> `LinglanResolver`。这和 LX Music 的分工一致——LX 的内置源本身不含 `musicUrl`，
+> 直链一向由外部脚本提供，所以单把内置源「提取」出来是能搜不能播的。
+
+### 可选：`tools/lx_bridge`（给其它客户端用）
+
+把同一套能力做成独立 HTTP 服务的 Node 版本，零依赖。App 已经内置了引擎，正常用不到它；
+但如果你想让别的客户端、或者在 PC 上跑一份，可以用：
 
 ```bash
 cd tools/lx_bridge
-cp .env.example .env      # 填 LINGLAN_KEY=你的聆澜音源密钥
+cp .env.example .env      # 填 LINGLAN_KEY
 node bridge.js 18093
-# adb reverse tcp:18093 tcp:18093，App 里填 http://127.0.0.1:18093
 ```
 
-零第三方依赖。它的做法是把 LX Music 的**内置源元数据接口**（搜索 / 榜单 / 歌单 / 歌词 / 封面）
-重新实现，再接到**自定义源脚本的直链服务**上——因为 LX 的内置源本身不含 `musicUrl`，
-只有元数据，这也是为什么单把内置源「提取」出来是能搜不能播的。
-
-实测链路（酷我，模拟器端到端）：搜 `jay` 出 8 条带封面的单曲 → 起播 PLAYING →
-进度 0 → 8639ms → 播放页歌词正常 → 榜单 32 个 → 榜单详情带封面。
-细节、踩坑记录和限制见 [`tools/lx_bridge/README.md`](tools/lx_bridge/README.md)。
+细节和踩坑记录见 [`tools/lx_bridge/README.md`](tools/lx_bridge/README.md)。
 
 > 顺带澄清一个常见误解：**LX Music 的 `.js` 音源脚本不能直接填进「轻听」**。LX 脚本只实现
 > `musicUrl` 一个动作（拿 ID 换直链），搜索和歌单是 LX 客户端内置的，脚本里没有。
@@ -128,6 +150,7 @@ app/src/main/java/com/tom/musicplayer/
 │   ├── Prefs.kt / ResumeStore.kt / SourceStore.kt
 │   ├── lyrics/                LRC 解析 + LRCLIB 搜索
 │   ├── online/                在线音乐：音源、协议客户端、下载器、自建歌单
+│   │   └── builtin/           内置源引擎（酷我 / 网易云）+ 共用直链解析
 │   └── webdav/                WebDAV 客户端与目录扫描
 ├── ui/
 │   ├── AppRoot.kt             页面路由 + 播放器连接
