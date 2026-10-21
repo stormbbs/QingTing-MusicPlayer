@@ -45,6 +45,27 @@ python tools/mock_source.py 18080 ./我的音乐
 # 模拟器里访问本机：adb reverse tcp:18080 tcp:18080，音源地址填 http://127.0.0.1:18080
 ```
 
+### 接现成的插件生态：`tools/mf_bridge`
+
+自己写音源太麻烦，仓库里带了一个桥接器，把 **MusicFree 插件**直接变成「轻听」能用的音源：
+
+```bash
+cd tools/mf_bridge && npm install
+# 把插件 js 丢进 plugins/，然后：
+BIND=127.0.0.1 node bridge.js 18092
+# adb reverse tcp:18092 tcp:18092，App 里填 http://127.0.0.1:18092
+```
+
+App 侧一行代码都不用改——两边的能力本来是同构的（`search` / `getTopLists` / `getTopListDetail` /
+`getMediaSource` / `getLyric` 正好对上六个接口）。细节和限制见 [`tools/mf_bridge/README.md`](tools/mf_bridge/README.md)。
+
+实测过的链路（bilibili 插件，端到端跑在模拟器上）：搜到 8 条 → 点第一首 → 播放状态进入
+PLAYING → 进度从 3.0s 走到 9.8s → 榜单列表出 7 条 → 无崩溃。
+
+> 顺带澄清一个常见误解：**LX Music 的 `.js` 音源脚本不能直接填进「轻听」**。LX 脚本只实现
+> `musicUrl` 一个动作（拿 ID 换直链），搜索和歌单是 LX 客户端内置的，脚本里没有。
+> 这类源只能配合 LX 自己用；要接到「轻听」，得用有 `search` 的 MusicFree 插件格式。
+
 两个实现上值得一提的取舍：
 
 - **直链不落库**。直链通常带签名、会过期，所以列表里存的是 `qingting://online/<源ID>/<歌曲ID>` 这种占位 URI，真正要播的时候才去解析。缓存的 key 也必须是这个占位 URI——用解析后的签名 URL 当 key 的话每次都是 miss。
@@ -103,6 +124,7 @@ app/src/main/java/com/tom/musicplayer/
 └── model/                     数据类
 docs/                          协议文档
 tools/mock_source.py           参考音源实现（自测 / 写音源的样例）
+tools/mf_bridge/               MusicFree 插件 -> 轻听音源 的桥接器
 ```
 
 ## 两个值得记一笔的坑

@@ -23,3 +23,10 @@ Thumbs.db
 *.aab
 *.jks
 *.keystore
+
+# 桥接器（tools/mf_bridge）
+tools/mf_bridge/node_modules/
+tools/mf_bridge/idmap.json
+tools/mf_bridge/bridge.log
+# 第三方插件不随仓库分发（各家许可不同，自己下载）
+tools/mf_bridge/plugins/*.js
