@@ -1,10 +1,10 @@
 {
   "versionCode": 12,
   "versionName": "2.0-1021",
-  "url": "https://github.com/stormbbs/QingTing-MusicPlayer/releases/download/v1.9.1/qingting-1.9.1-1021.apk",
+  "url": "https://github.com/stormbbs/QingTing-MusicPlayer/releases/download/v2.0/qingting-2.0-1021.apk",
   "mirrorUrl": "",
-  "size": 21162422,
-  "sha256": "a564d60693e2b28c88124866c6e86a81a9242da818903887cf486a091878e814",
+  "size": 21178806,
+  "sha256": "c3876eb37d3d7ce311ecfea0d382524d050da79a835392147bab1e6253865452",
   "notes": "1. 内置音源不再预置密钥：酷我 / 网易云仍然内置引擎（搜索、榜单、歌词、封面照旧），但播放直链必须用你自己的音源密钥——App 不再携带任何打包时注入的密钥。\n2. 添加内置平台的流程改为「先填密钥、再进列表」：从「我的 → 在线音源 → + → 酷我音乐 / 网易云音乐」点进去填密钥，填完才添加成功，不会再出现能搜不能播的空壳源。\n3. 升级时会自动清空旧的预置密钥，需要重新填一次自己的；自定义协议音源入口保持不变。",
   "mandatory": false
 }
