@@ -1,10 +1,10 @@
 {
   "versionCode": 13,
   "versionName": "2.0.1-1021",
-  "url": "https://github.com/stormbbs/QingTing-MusicPlayer/releases/download/v2.0/qingting-2.0-1021.apk",
+  "url": "https://github.com/stormbbs/QingTing-MusicPlayer/releases/download/v2.0.1/qingting-2.0.1-1021.apk",
   "mirrorUrl": "",
   "size": 21178806,
-  "sha256": "c3876eb37d3d7ce311ecfea0d382524d050da79a835392147bab1e6253865452",
+  "sha256": "aa8a9e909348467d36ddf973a71a098c32b166836d0137f1634c59b266ee03ae",
   "notes": "修复：我的下载 / 歌单 / 点心 / 音源管理等二级页面，按系统返回（含全面屏左滑手势）不再直接退出 App，改为回到上一级页面（我的下载回到「我的」，以此类推）。",
   "mandatory": false
 }
