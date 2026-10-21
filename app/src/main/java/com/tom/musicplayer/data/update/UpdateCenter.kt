@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -175,7 +176,7 @@ object UpdateCenter {
                 continue
             }
             val info = try {
-                parseManifest(text)
+                parseManifest(text, url)
             } catch (e: Exception) {
                 last = Exception("清单格式不对：${e.message}")
                 continue
@@ -198,7 +199,12 @@ object UpdateCenter {
         }
     }
 
-    private fun parseManifest(raw: String): UpdateInfo? {
+    /**
+     * @param manifestUrl 清单自己的地址。清单里的 `url` 可以只写文件名，
+     *                    这时按清单所在目录拼出完整地址——换个域名放同样的文件，
+     *                    清单一个字都不用改。
+     */
+    private fun parseManifest(raw: String, manifestUrl: String): UpdateInfo? {
         val root = JSONObject(raw)
         // 允许把版本信息包在 "latest" 里，写清单时更不容易和别的字段搞混
         val o = root.optJSONObject("latest") ?: root
@@ -208,13 +214,20 @@ object UpdateCenter {
         return UpdateInfo(
             versionCode = code,
             versionName = o.optString("versionName").ifBlank { "v$code" },
-            url = url,
-            mirrorUrl = o.optString("mirrorUrl").takeIf { it.isNotBlank() },
+            url = absolute(url, manifestUrl),
+            mirrorUrl = o.optString("mirrorUrl").takeIf { it.isNotBlank() }
+                ?.let { absolute(it, manifestUrl) },
             sizeBytes = o.optLong("size", 0L),
             sha256 = o.optString("sha256").takeIf { it.isNotBlank() },
             notes = o.optString("notes").replace("\\n", "\n"),
             mandatory = o.optBoolean("mandatory", false)
         )
+    }
+
+    /** 相对地址按清单所在目录解析；本来就是完整地址就原样返回。 */
+    private fun absolute(link: String, manifestUrl: String): String {
+        if (link.startsWith("http://") || link.startsWith("https://")) return link
+        return manifestUrl.toHttpUrlOrNull()?.resolve(link)?.toString() ?: link
     }
 
     // ------------------------------------------------------------ 下载安装

@@ -171,18 +171,25 @@ node bridge.js 18093
 }
 ```
 
-- 默认清单地址是仓库根目录的 `latest.json`（先试 jsDelivr，再试 GitHub raw）。想放自己服务器，在「更新源」里填完整 URL 即可。
+- 默认清单地址是仓库根目录的 `latest.json`（先试 jsDelivr，再试 GitHub raw）。仓库是私有的，这两条默认地址取不到文件，所以实际用的是「更新源」里填的自建地址。
+- `url` 可以只写文件名（`"url": "qingting-latest.apk"`），App 会按清单自己的地址拼出完整链接。自建更新源就用这种写法：同一套文件扔到任何域名、任何目录都不用改清单。
 - `size` / `sha256` 填了就校验，下坏了会明确报错而不是装上去崩。
 
-发布一个新版本：
+### 自建更新源（放自己服务器）
 
 ```bash
-python tools/publish_update.py --build                  # 打包 + 生成 dist/latest.json
-python tools/publish_update.py --build --url https://你的地址/qingting-1.7-1021.apk
-python tools/publish_update.py --build --serve          # 同一 Wi-Fi 下手机直接用，连外网都不用
+python tools/make_update_bundle.py        # 生成 dist/update/ 和 dist/轻听-更新源-*.zip
 ```
 
-把 `dist/latest.json` 里的内容同步到仓库根目录的 `latest.json`，再把 `dist/qingting-*.apk` 放到清单 `url` 指向的位置（GitHub Release 附件 / 自己的服务器都行）。
+`dist/update/` 里两个文件传到服务器同一个目录（`latest.json` + `qingting-latest.apk`），然后在 App 的「更新源」里填 `http(s)://你的地址/那个目录/latest.json`。
+
+APK 文件名固定，清单里的地址又是相对的，所以**发新版只需要重新跑一次脚本、覆盖这两个文件**，地址永远不用改。
+
+发布一个新版本（GitHub Release 那条路，仓库转公开时才有意义）：
+
+```bash
+python tools/publish_release.py v1.9.1 app/build/outputs/apk/debug/app-debug.apk
+```
 
 > 覆盖安装要求签名一致。一直用同一台机器、同一个 `debug.keystore` 打包就没问题；换了签名只能卸载重装一次。
 

@@ -35,3 +35,6 @@ tools/mf_bridge/plugins/*.js
 # 密钥是永久授权，绝对不能进仓库
 tools/lx_bridge/.env
 tools/lx_bridge/bridge.log
+
+# 打包产物（更新源压缩包、APK），不进仓库
+dist/
