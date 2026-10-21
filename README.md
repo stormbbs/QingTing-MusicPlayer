@@ -62,6 +62,26 @@ App 侧一行代码都不用改——两边的能力本来是同构的（`search
 实测过的链路（bilibili 插件，端到端跑在模拟器上）：搜到 8 条 → 点第一首 → 播放状态进入
 PLAYING → 进度从 3.0s 走到 9.8s → 榜单列表出 7 条 → 无崩溃。
 
+### 接国内平台：`tools/lx_bridge`
+
+MusicFree 官方仓库已经把国内平台插件下架了，剩下的 bilibili 返回的是合集视频而不是单曲。
+想要正常的华语曲库，用 `tools/lx_bridge`：
+
+```bash
+cd tools/lx_bridge
+cp .env.example .env      # 填 LINGLAN_KEY=你的聆澜音源密钥
+node bridge.js 18093
+# adb reverse tcp:18093 tcp:18093，App 里填 http://127.0.0.1:18093
+```
+
+零第三方依赖。它的做法是把 LX Music 的**内置源元数据接口**（搜索 / 榜单 / 歌单 / 歌词 / 封面）
+重新实现，再接到**自定义源脚本的直链服务**上——因为 LX 的内置源本身不含 `musicUrl`，
+只有元数据，这也是为什么单把内置源「提取」出来是能搜不能播的。
+
+实测链路（酷我，模拟器端到端）：搜 `jay` 出 8 条带封面的单曲 → 起播 PLAYING →
+进度 0 → 8639ms → 播放页歌词正常 → 榜单 32 个 → 榜单详情带封面。
+细节、踩坑记录和限制见 [`tools/lx_bridge/README.md`](tools/lx_bridge/README.md)。
+
 > 顺带澄清一个常见误解：**LX Music 的 `.js` 音源脚本不能直接填进「轻听」**。LX 脚本只实现
 > `musicUrl` 一个动作（拿 ID 换直链），搜索和歌单是 LX 客户端内置的，脚本里没有。
 > 这类源只能配合 LX 自己用；要接到「轻听」，得用有 `search` 的 MusicFree 插件格式。
@@ -125,6 +145,7 @@ app/src/main/java/com/tom/musicplayer/
 docs/                          协议文档
 tools/mock_source.py           参考音源实现（自测 / 写音源的样例）
 tools/mf_bridge/               MusicFree 插件 -> 轻听音源 的桥接器
+tools/lx_bridge/               LX 内置源元数据 + 直链 -> 轻听音源 的桥接器
 ```
 
 ## 两个值得记一笔的坑
