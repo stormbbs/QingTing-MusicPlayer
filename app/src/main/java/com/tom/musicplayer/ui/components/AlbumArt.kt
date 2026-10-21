@@ -47,7 +47,17 @@ fun AlbumArt(
     LaunchedEffect(song?.id, targetPx) {
         val current = song
         bitmap = if (current == null) null
-        else withContext(Dispatchers.IO) { ArtworkLoader.bitmap(context, current.uri, targetPx) }
+        else withContext(Dispatchers.IO) {
+            // 在线曲目的 uri 是 qingting://online/... 这种占位地址，拿去解本地文件必然失败，
+            // 封面得用音源给的 http 图片地址单独加载。
+            if (current.isOnline) {
+                current.coverUrl?.takeIf { it.isNotBlank() }?.let {
+                    ArtworkLoader.remoteBitmap(it, targetPx)
+                }
+            } else {
+                ArtworkLoader.bitmap(context, current.uri, targetPx)
+            }
+        }
     }
 
     Box(
