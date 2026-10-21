@@ -58,8 +58,10 @@ def main():
     target = sys.argv[1]
     tok = token()
     c = get(f"/repos/{REPO}/git/commits/{target}", tok)
-    local_tree = git("rev-parse", "999f90a^{tree}")
-    print("本地 999f90a 的 tree:", local_tree)
+    local = git("rev-parse", "HEAD")
+    current = git("rev-parse", "refs/heads/main")
+    local_tree = git("rev-parse", local + "^{tree}")
+    print(f"本地 HEAD  {local[:7]} 的 tree:", local_tree)
     print("远端提交的 tree   :", c["tree"]["sha"])
     if local_tree != c["tree"]["sha"]:
         raise SystemExit("tree 不一致，内容有差异，请人工检查")
@@ -103,9 +105,11 @@ def main():
 
     if not sha:
         raise SystemExit("重建失败（换行/时区形式都对不上），未改动本地分支")
-    git("update-ref", "refs/heads/main", target, "999f90a")
+    git("update-ref", "refs/heads/main", target, current)
+    git("update-ref", "refs/remotes/origin/main", target)
     print("本地 main 已对齐到", target[:7])
     print(git("log", "--oneline", "-3"))
+    print(git("status", "-sb").splitlines()[0])
 
 
 if __name__ == "__main__":
