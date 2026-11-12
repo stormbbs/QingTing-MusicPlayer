@@ -41,3 +41,7 @@ dist/
 
 # 本机验证临时文件
 .verify/
+
+# Python 工具脚本编译缓存
+__pycache__/
+*.pyc

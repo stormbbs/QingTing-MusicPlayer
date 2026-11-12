@@ -198,6 +198,22 @@ python tools/publish_release.py v1.9.1 app/build/outputs/apk/debug/app-debug.apk
 
 > 覆盖安装要求签名一致。一直用同一台机器、同一个 `debug.keystore` 打包就没问题；换了签名只能卸载重装一次。
 
+### GitHub 授权（开了两步验证也一样）
+
+两步验证只保护**网页登录**，命令行推送从来不收账号密码，不要把密码或 6 位动态验证码给任何人（包括助手）。给命令行用的凭据是单独的令牌：
+
+1. 自己在浏览器登录 GitHub（这一步完成两步验证）→ 头像 → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token。
+2. Expiration 建议选 7 天（用完即可 Revoke）；Repository access 选 **Only select repositories** → `QingTing-MusicPlayer`。
+3. Permissions → Repository permissions 只勾 **Contents: Read and Write**（Metadata: Read 会自动带上）。生成后复制 `github_pat_...` 这一串。
+4. 临时设成环境变量再运行，token 不写进本机凭据管理器：
+
+```bash
+GITHUB_TOKEN=github_pat_xxx python tools/push_via_api.py     # github.com 不通时走 API 推代码
+GITHUB_TOKEN=github_pat_xxx python tools/publish_release.py v2.2.0 app/build/outputs/apk/debug/app-debug.apk
+```
+
+推送完成后到 GitHub 把这条 token 撤销即可。想长期免维护可以改用 SSH 公钥推代码（发 Release 仍需令牌）；嫌细粒度令牌麻烦也可以用 classic token，勾 `repo` 一项，但权限范围更大。
+
 ## 目录结构
 
 ```

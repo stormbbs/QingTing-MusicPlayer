@@ -24,15 +24,25 @@ def git(*args):
 
 
 def token():
-    cred = subprocess.run(
-        ["git", "credential", "fill"],
-        input=b"protocol=https\nhost=github.com\n\n",
-        capture_output=True,
-    ).stdout.decode("utf-8", "replace")
+    # 与 push_via_api.py 保持一致：优先一次性环境变量，其次本机凭据管理器。
+    import os
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    try:
+        cred = subprocess.run(
+            ["git", "credential", "fill"],
+            input=b"protocol=https\nhost=github.com\n\n",
+            capture_output=True,
+            timeout=15,
+        ).stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        cred = ""
     for line in cred.splitlines():
         if line.startswith("password="):
             return line[len("password="):].strip()
-    raise SystemExit("没有找到 GitHub 凭据")
+    raise SystemExit("没有找到 GitHub 凭据：请设置环境变量 GITHUB_TOKEN，或先在 git 里登录一次")
 
 
 def call(method, url, tok, body=None, raw=None, content_type=None):
@@ -99,12 +109,17 @@ def main():
     print(f"已上传 {asset_name}  ({up.get('size', 0)/1024/1024:.1f}MB)")
 
     url = up.get("browser_download_url") or f"https://github.com/{REPO}/releases/download/{tag}/{asset_name}"
-    manifest["url"] = url
+    # 自建更新源用相对地址（qingting-latest.apk）。私有仓库的 Release 直链要登录才能下，
+    # 写进清单会让手机端应用内升级 404，所以只有清单本来就是绝对地址时才替换。
+    old_url = manifest.get("url", "")
+    if old_url.startswith("http"):
+        manifest["url"] = url
     manifest["size"] = len(raw)
     manifest["sha256"] = digest
     json.dump(manifest, open(manifest_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     open(manifest_path, "a", encoding="utf-8").write("\n")
-    print("latest.json 已更新：", url)
+    print("Release 附件：", url)
+    print("latest.json 的 url 保持：", manifest["url"])
 
 
 if __name__ == "__main__":

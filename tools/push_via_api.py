@@ -21,15 +21,27 @@ def git(*args, binary=False):
 
 
 def token():
-    cred = subprocess.run(
-        ["git", "credential", "fill"],
-        input=b"protocol=https\nhost=github.com\n\n",
-        capture_output=True,
-    ).stdout.decode("utf-8", "replace")
+    # 优先用一次性环境变量：token 不必写进 Windows 凭据管理器，用完即可撤销。
+    # 设置方式见 README「GitHub 授权」。
+    import os
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    # 退回本机凭据管理器；它可能弹登录窗，给超时免得整条命令卡死。
+    try:
+        cred = subprocess.run(
+            ["git", "credential", "fill"],
+            input=b"protocol=https\nhost=github.com\n\n",
+            capture_output=True,
+            timeout=15,
+        ).stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        cred = ""
     for line in cred.splitlines():
         if line.startswith("password="):
             return line[len("password="):].strip()
-    raise SystemExit("没有找到 GitHub 凭据，先在 git 里登录一次")
+    raise SystemExit("没有找到 GitHub 凭据：请设置环境变量 GITHUB_TOKEN，或先在 git 里登录一次")
 
 
 def call(method, path, body=None, tok=""):
