@@ -69,7 +69,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tom.musicplayer.data.Prefs
-import com.tom.musicplayer.data.online.LocalPlaylistStore
 import com.tom.musicplayer.data.online.Downloader
 import com.tom.musicplayer.data.online.OnlineApi
 import com.tom.musicplayer.data.online.OnlineSourceStore
@@ -393,17 +392,19 @@ fun OnlineScreen(
     }
 
     addTarget?.let { song ->
-        AddToPlaylistDialog(
-            song = song,
+        // 和下载页 / 曲库页共用一个选歌单弹窗，三处行为一致
+        PlaylistPickerDialog(
+            titles = listOf(song.name),
             onDismiss = { addTarget = null },
-            onConfirm = { playlistId ->
-                LocalPlaylistStore.addSong(context, playlistId, song)
+            onPick = { playlistId ->
+                val added = addToPlaylist(context, listOf(song.toSong()), playlistId = playlistId)
                 addTarget = null
+                shortToast(context, if (added > 0) "已加到歌单：${song.name}" else "这首歌已经在歌单里了")
             },
             onCreate = { name ->
-                val p = LocalPlaylistStore.create(context, name)
-                LocalPlaylistStore.addSong(context, p.id, song)
+                addToPlaylist(context, listOf(song.toSong()), newName = name)
                 addTarget = null
+                shortToast(context, "已新建「$name」并加入")
             }
         )
     }
@@ -702,67 +703,3 @@ private fun extractPlaylistId(raw: String): String {
     return text.substringAfterLast('/').substringBefore('?')
 }
 
-@Composable
-private fun AddToPlaylistDialog(
-    song: OnlineSong,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-    onCreate: (String) -> Unit
-) {
-    val context = LocalContext.current
-    val playlists = remember { LocalPlaylistStore.load(context) }
-    var newName by remember { mutableStateOf("") }
-    var creating by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("加到歌单") },
-        text = {
-            Column {
-                Text(
-                    text = song.name,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                if (playlists.isEmpty() || creating) {
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        singleLine = true,
-                        placeholder = { Text("新歌单名字") },
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                } else {
-                    playlists.forEach { p ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onConfirm(p.id) }
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(p.name, modifier = Modifier.weight(1f))
-                            Text(
-                                text = "${p.songs.size} 首",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(onClick = { creating = true }) { Text("新建歌单") }
-                }
-            }
-        },
-        confirmButton = {
-            if (creating || playlists.isEmpty()) {
-                TextButton(
-                    enabled = newName.isNotBlank(),
-                    onClick = { onCreate(newName.trim()) }
-                ) { Text("创建并加入") }
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
-}

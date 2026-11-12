@@ -38,3 +38,6 @@ tools/lx_bridge/bridge.log
 
 # 打包产物（更新源压缩包、APK），不进仓库
 dist/
+
+# 本机验证临时文件
+.verify/

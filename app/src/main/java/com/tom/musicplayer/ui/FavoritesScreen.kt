@@ -1,7 +1,6 @@
 package com.tom.musicplayer.ui
 
 import android.content.Context
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,14 +43,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tom.musicplayer.data.FavoriteSong
 import com.tom.musicplayer.data.FavoritesStore
-import com.tom.musicplayer.data.online.DownloadStore
+import com.tom.musicplayer.data.SongRefResolver
 import com.tom.musicplayer.model.Song
 import com.tom.musicplayer.player.PlayerController
 import com.tom.musicplayer.ui.components.AlbumArt
 import com.tom.musicplayer.util.formatDuration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * 「我点心的歌曲」。
@@ -278,15 +276,13 @@ private fun resolve(
     entries: List<FavoriteSong>,
     library: List<Song>
 ): List<FavoriteRow> {
-    val downloads = runCatching { DownloadStore.load(context) }.getOrDefault(emptyList())
-    val byKey = library.associateBy { FavoritesStore.keyOf(it) }
-    val byName = library.filter { it.fileName.isNotBlank() }.associateBy { it.fileName }
-
-    // 先逐条解析，再按「同一首歌」分组
+    // 还原规则和自建歌单共用一份（SongRefResolver），这里只负责「同一首歌合并成一行」
+    val resolved = SongRefResolver.resolveAll(context, entries, library)
     val groups = LinkedHashMap<String, MutableList<FavoriteRow>>()
-    entries.forEach { entry ->
-        val row = resolveOne(context, entry, downloads, byKey, byName)
-        groups.getOrPut(groupKey(entry)) { ArrayList(1) }.add(row)
+    entries.forEachIndexed { i, entry ->
+        val r = resolved[i]
+        groups.getOrPut(groupKey(entry)) { ArrayList(1) }
+            .add(FavoriteRow(listOf(entry), entry, r.song, r.where))
     }
 
     return groups.values.map { list ->
@@ -309,52 +305,3 @@ private fun groupKey(entry: FavoriteSong): String = when {
     entry.fileName.isNotBlank() -> "file:${entry.fileName.lowercase()}"
     else -> "id:${entry.id}"
 }
-
-private fun resolveOne(
-    context: Context,
-    entry: FavoriteSong,
-    downloads: List<com.tom.musicplayer.data.online.DownloadedSong>,
-    byKey: Map<String, Song>,
-    byName: Map<String, Song>
-): FavoriteRow {
-    // 下载过的那一份：在线歌按「音源:歌曲」找，下载记录自己的 id 也认
-    // （从「我的下载」点心时，收藏 key 就是下载记录的 id）
-    val saved = downloads.firstOrNull {
-        (entry.hasOnlineIdentity &&
-            it.sourceId == entry.onlineSourceId && it.songId == entry.onlineSongId) ||
-            it.id == entry.id
-    }?.let { DownloadStore.toSong(context, it) }
-
-    val row = when {
-        saved != null -> FavoriteRow(listOf(entry), entry, saved, "已下载")
-        entry.hasOnlineIdentity -> {
-            // 没下载过就按在线播：直链在要播的时候才向音源解析
-            val inLibrary = byKey[entry.id]
-            if (inLibrary != null) FavoriteRow(listOf(entry), entry, inLibrary, "已下载")
-            else FavoriteRow(listOf(entry), entry, entry.toSong(), "在线")
-        }
-        else -> {
-            val inLibrary = byKey[entry.id]
-                ?: entry.fileName.takeIf { it.isNotBlank() }?.let { byName[it] }
-            if (inLibrary != null) {
-                FavoriteRow(listOf(entry), entry, inLibrary, "本地")
-            } else {
-                // 曲库里没有，就试试记录里的老 Uri；读得开才算还在
-                val uri = entry.uri?.takeIf { it.isNotBlank() }
-                    ?.let { runCatching { Uri.parse(it) }.getOrNull() }
-                val ok = uri != null && readable(context, uri)
-                FavoriteRow(listOf(entry), entry, if (ok) entry.toSong() else null, "本地")
-            }
-        }
-    }
-    return row
-}
-
-/** 老 Uri 还能不能读：内容 Uri 真去开一次，文件 Uri 看文件在不在。 */
-private fun readable(context: Context, uri: Uri): Boolean = runCatching {
-    when (uri.scheme) {
-        "content" -> context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
-        "file" -> File(uri.path.orEmpty()).exists()
-        else -> true
-    }
-}.getOrDefault(false)

@@ -1,8 +1,10 @@
 package com.tom.musicplayer.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +34,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -62,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -103,6 +107,9 @@ fun LibraryScreen(
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var favOnly by remember { mutableStateOf(false) }
+    // 长按某一行 → 加到歌单；和下载页共用一个选歌单弹窗
+    var pickerSong by remember { mutableStateOf<Song?>(null) }
+    val context = LocalContext.current
 
     // 过滤结果保留原始下标：点歌时要知道它在完整列表里的位置
     val visible = remember(songs, query, favOnly, favorites) {
@@ -237,6 +244,7 @@ fun LibraryScreen(
                                 isCurrent = originalIndex == currentIndex,
                                 isFavorite = FavoritesStore.keyOf(song) in favorites,
                                 onToggleFavorite = { onToggleFavorite(song) },
+                                onAddToPlaylist = { pickerSong = song },
                                 onClick = {
                                     if (filtering) {
                                         // 搜索或收藏视图下，队列就应该是眼前这一份，不该跳回完整列表
@@ -258,6 +266,26 @@ fun LibraryScreen(
                 }
             }
         }
+    }
+
+    pickerSong?.let { song ->
+        PlaylistPickerDialog(
+            titles = listOf(song.title),
+            onDismiss = { pickerSong = null },
+            onPick = { playlistId ->
+                val added = addToPlaylist(context, listOf(song), playlistId = playlistId)
+                pickerSong = null
+                shortToast(
+                    context,
+                    if (added > 0) "已加到歌单：${song.title}" else "这首歌已经在歌单里了"
+                )
+            },
+            onCreate = { name ->
+                addToPlaylist(context, listOf(song), newName = name)
+                pickerSong = null
+                shortToast(context, "已新建「$name」并加入")
+            }
+        )
     }
 }
 
@@ -545,15 +573,17 @@ private fun ModePill(mode: PlayMode, onSelectMode: (PlayMode) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SongRow(
     song: Song,
     isCurrent: Boolean,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
+    onAddToPlaylist: () -> Unit,
     onClick: () -> Unit
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     val containerColor =
         if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
         else MaterialTheme.colorScheme.surface
@@ -562,10 +592,14 @@ private fun SongRow(
         else MaterialTheme.colorScheme.onSurface
 
     Card(
-        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 5.dp),
+            .padding(horizontal = 16.dp, vertical = 5.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { menuExpanded = true }
+            ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = containerColor),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isCurrent) 4.dp else 1.dp)
@@ -607,6 +641,24 @@ private fun SongRow(
                     modifier = Modifier.size(20.dp),
                     tint = if (isFavorite) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("播放") },
+                    onClick = { menuExpanded = false; onClick() }
+                )
+                DropdownMenuItem(
+                    text = { Text("加到歌单") },
+                    leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
+                    onClick = { menuExpanded = false; onAddToPlaylist() }
+                )
+                DropdownMenuItem(
+                    text = { Text(if (isFavorite) "取消点心" else "点心") },
+                    onClick = { menuExpanded = false; onToggleFavorite() }
                 )
             }
         }

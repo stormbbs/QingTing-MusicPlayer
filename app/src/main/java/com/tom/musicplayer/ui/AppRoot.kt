@@ -61,6 +61,7 @@ import com.tom.musicplayer.data.Prefs
 import com.tom.musicplayer.data.UriGrant
 import com.tom.musicplayer.data.online.DownloadStore
 import com.tom.musicplayer.data.online.Downloader
+import com.tom.musicplayer.data.online.LocalPlaylistStore
 import com.tom.musicplayer.data.update.UpdateCenter
 import com.tom.musicplayer.model.Song
 import com.tom.musicplayer.player.NotificationActions
@@ -96,6 +97,10 @@ fun AppRoot() {
     var queueOpen by remember { mutableStateOf(false) }
     // 「我的」的下级页：返回时回「我的」，底栏继续保持「我的」高亮
     var meSub by remember { mutableStateOf<AppScreen?>(null) }
+    // 歌单详情 / 选歌页是「我的歌单」的内部层级。提到这里，去选歌页加完歌回来
+    // 还能停在原来那个歌单详情，而不是退回歌单列表
+    var playlistOpenId by remember { mutableStateOf<String?>(null) }
+    var addSongsFor by remember { mutableStateOf<String?>(null) }
 
     /**
      * 「我的音乐」列表 == 本地曲库，独立于播放队列。
@@ -257,7 +262,7 @@ fun AppRoot() {
             MeScreen(
                 onOpenDownloads = { screen = AppScreen.DOWNLOADS },
                 onOpenFavorites = { favoritesBack = AppScreen.ME; screen = AppScreen.FAVORITES },
-                onOpenPlaylists = { screen = AppScreen.PLAYLISTS },
+                onOpenPlaylists = { playlistOpenId = null; screen = AppScreen.PLAYLISTS },
                 onOpenSources = {
                     returnToOnline = false
                     screen = AppScreen.ONLINE_SOURCES
@@ -298,7 +303,7 @@ fun AppRoot() {
             AppScreen.ME -> MeScreen(
                 onOpenDownloads = { screen = AppScreen.DOWNLOADS },
                 onOpenFavorites = { favoritesBack = AppScreen.ME; screen = AppScreen.FAVORITES },
-                onOpenPlaylists = { screen = AppScreen.PLAYLISTS },
+                onOpenPlaylists = { playlistOpenId = null; screen = AppScreen.PLAYLISTS },
                 onOpenSources = {
                     returnToOnline = false
                     screen = AppScreen.ONLINE_SOURCES
@@ -319,6 +324,9 @@ fun AppRoot() {
                 onPickFolder = { folderPicker.launch(null) }
             )
             AppScreen.PLAYLISTS -> PlaylistsScreen(
+                library = library,
+                openId = playlistOpenId,
+                onOpenIdChange = { playlistOpenId = it },
                 onOpenFavorites = { favoritesBack = AppScreen.PLAYLISTS; screen = AppScreen.FAVORITES },
                 onBack = { screen = AppScreen.ME },
                 onPlay = { list, index ->
@@ -326,6 +334,27 @@ fun AppRoot() {
                         withPlayer(context) { PlayerController.playSongs(context, list, index) }
                     }
                     showPlayer = true
+                },
+                onAddSongs = { id ->
+                    addSongsFor = id
+                    screen = AppScreen.ADD_SONGS
+                }
+            )
+            AppScreen.ADD_SONGS -> AddSongsScreen(
+                playlistId = addSongsFor.orEmpty(),
+                playlistName = remember(addSongsFor, screen) {
+                    val id = addSongsFor ?: return@remember "我的歌单"
+                    LocalPlaylistStore.load(context).firstOrNull { it.id == id }?.name
+                        ?: "我的歌单"
+                },
+                library = library,
+                onBack = { screen = AppScreen.PLAYLISTS },
+                onDone = { count ->
+                    toast(
+                        context,
+                        if (count > 0) "已加入 $count 首" else "这些歌已经在歌单里了"
+                    )
+                    screen = AppScreen.PLAYLISTS
                 }
             )
             // 点心（收藏）就是一份歌单，点开直接能播，不用先转存
@@ -519,17 +548,24 @@ fun AppRoot() {
         AppScreen.SOURCES -> AppScreen.LIBRARY
         AppScreen.DOWNLOADS -> AppScreen.ME
         AppScreen.PLAYLISTS -> AppScreen.ME
+        AppScreen.ADD_SONGS -> AppScreen.PLAYLISTS
         AppScreen.FAVORITES -> favoritesBack
         AppScreen.ONLINE_SOURCES -> if (returnToOnline) AppScreen.ONLINE else AppScreen.ME
         else -> null
     }
-    BackHandler(enabled = !showPlayer && screenParent != null) {
+    // 歌单详情是「我的歌单」里的第二层：返回先退回歌单列表，再按一次才回「我的」。
+    // 两个 handler 顺序有讲究：后注册的优先，所以「退回列表」放在后面。
+    val inPlaylistDetail = screen == AppScreen.PLAYLISTS && playlistOpenId != null
+    BackHandler(enabled = !showPlayer && screenParent != null && !inPlaylistDetail) {
         screenParent?.let { screen = it }
+    }
+    BackHandler(enabled = !showPlayer && inPlaylistDetail) {
+        playlistOpenId = null
     }
 }
 
 private enum class AppScreen {
-    LIBRARY, SOURCES, ONLINE, ME, DOWNLOADS, PLAYLISTS, FAVORITES, ONLINE_SOURCES, BACKUP
+    LIBRARY, SOURCES, ONLINE, ME, DOWNLOADS, PLAYLISTS, ADD_SONGS, FAVORITES, ONLINE_SOURCES, BACKUP
 }
 
 /**

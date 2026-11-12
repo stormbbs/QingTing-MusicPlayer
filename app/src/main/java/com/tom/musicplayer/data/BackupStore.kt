@@ -6,7 +6,6 @@ import com.tom.musicplayer.data.online.FailedDownloadStore
 import com.tom.musicplayer.data.online.LocalPlaylist
 import com.tom.musicplayer.data.online.LocalPlaylistStore
 import com.tom.musicplayer.data.online.OnlineSourceStore
-import com.tom.musicplayer.model.OnlineSong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -32,7 +31,9 @@ import java.util.Locale
 object BackupStore {
 
     /** 备份格式版本。以后加字段时靠它决定怎么兼容老文件。 */
-    private const val VERSION = 1
+    // v2：歌单条目从「只放在线歌」升级成通用的 FavoriteSong（本地 / 下载 / 在线都能存）。
+    // 导入时新旧两种都认，所以老备份照样能还原。
+    private const val VERSION = 2
 
     /** 导出的歌曲：优先存「音源身份」，本地文件另记文件名和 Uri 作兜底。 */
     private fun favoriteJson(f: FavoriteSong): JSONObject = JSONObject().apply {
@@ -101,17 +102,7 @@ object BackupStore {
             put("playlists", JSONArray().also { arr ->
                 playlists.forEach { p ->
                     val songs = JSONArray()
-                    p.songs.forEach { s ->
-                        songs.put(JSONObject().apply {
-                            put("songId", s.songId)
-                            put("name", s.name)
-                            put("artist", s.artist)
-                            put("album", s.album)
-                            put("durationMs", s.durationMs)
-                            put("cover", s.cover ?: "")
-                            put("sourceId", s.sourceId)
-                        })
-                    }
+                    p.songs.forEach { songs.put(LocalPlaylistStore.entryJson(it)) }
                     arr.put(JSONObject().apply {
                         put("id", p.id)
                         put("name", p.name)
@@ -179,23 +170,11 @@ object BackupStore {
                 val o = arr.optJSONObject(i) ?: continue
                 val id = o.optString("id")
                 if (id.isBlank()) continue
-                val songs = ArrayList<OnlineSong>()
+                val songs = ArrayList<FavoriteSong>()
                 o.optJSONArray("songs")?.let { sArr ->
                     for (j in 0 until sArr.length()) {
                         val s = sArr.optJSONObject(j) ?: continue
-                        val songId = s.optString("songId")
-                        if (songId.isBlank()) continue
-                        songs.add(
-                            OnlineSong(
-                                songId = songId,
-                                name = s.optString("name"),
-                                artist = s.optString("artist"),
-                                album = s.optString("album"),
-                                durationMs = s.optLong("durationMs", 0L),
-                                cover = s.optString("cover").takeIf { it.isNotBlank() },
-                                sourceId = s.optString("sourceId")
-                            )
-                        )
+                        LocalPlaylistStore.entryOf(s)?.let { songs.add(it) }
                     }
                 }
                 val old = byId[id]
@@ -208,9 +187,9 @@ object BackupStore {
                     )
                     addedList++
                 } else {
-                    // 同名歌单：按「音源 + 歌曲」合并曲目，顺序保留现有的在前
-                    val seen = old.songs.mapTo(HashSet()) { "${it.sourceId}:${it.songId}" }
-                    val extra = songs.filter { seen.add("${it.sourceId}:${it.songId}") }
+                    // 同名歌单：按规范 key 合并曲目，顺序保留现有的在前
+                    val seen = old.songs.mapTo(HashSet()) { it.id }
+                    val extra = songs.filter { seen.add(it.id) }
                     byId[id] = old.copy(songs = old.songs + extra)
                     mergedList++
                 }

@@ -5,7 +5,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,12 +30,16 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -80,7 +86,7 @@ import kotlinx.coroutines.withContext
  * 页头显示当前保存位置的完整路径 —— 用户想自己在文件管理器里找、或者拷到别处，
  * 都得先知道东西在哪。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DownloadsScreen(
     onBack: () -> Unit,
@@ -104,6 +110,9 @@ fun DownloadsScreen(
     val downloadTasks by Downloader.tasks.collectAsStateWithLifecycle()
     // 下载页也要能点心：一首歌下下来了，顺手就能收进「我点心的歌曲」
     val favorites by PlayerController.favorites.collectAsStateWithLifecycle()
+    // 长按某一行（或点「更多」）弹出菜单；加歌单时再弹选择歌单的对话框
+    var menuItemId by remember { mutableStateOf<String?>(null) }
+    var pickerSong by remember { mutableStateOf<Song?>(null) }
 
     // 重装 App 后下载记录会跟着数据一起被清掉，但歌还在 Music/轻听 里。
     // 重新列出来需要读音频的权限，所以放到用户主动点按钮时才申请。
@@ -322,12 +331,35 @@ fun DownloadsScreen(
             } else {
                 LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(items, key = { it.id }) { item ->
+                        // 长按出菜单是用户最顺手的路径，但纯长按不好发现，
+                        // 所以行尾再给一个「更多」按钮，打开的是同一份菜单
+                        val toggleFav: () -> Unit = {
+                            scope.launch {
+                                val song = withContext(Dispatchers.IO) {
+                                    DownloadStore.toSong(context, item)
+                                }
+                                if (song != null) PlayerController.toggleFavorite(song)
+                                else message = "文件已经不在原处了，没法点心"
+                            }
+                        }
+                        val openPicker: () -> Unit = {
+                            scope.launch {
+                                val song = withContext(Dispatchers.IO) {
+                                    DownloadStore.toSong(context, item)
+                                }
+                                if (song != null) pickerSong = song
+                                else message = "文件已经不在原处了，没法加到歌单"
+                            }
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    DownloadStore.toSong(context, item)?.let { onPlay(it) }
-                                }
+                                .combinedClickable(
+                                    onClick = {
+                                        DownloadStore.toSong(context, item)?.let { onPlay(it) }
+                                    },
+                                    onLongClick = { menuItemId = item.id }
+                                )
                                 .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -383,17 +415,9 @@ fun DownloadsScreen(
                             }
                             val favKey = FavoritesStore.keyOf(item.sourceId, item.songId, item.id)
                             val fav = favKey in favorites
-                            IconButton(onClick = {
-                                scope.launch {
-                                    // 收藏按规范 key 记账，所以这里得先把记录还原成一首歌；
-                                    // 文件已经不在了就别收，否则歌单里会多一条点不开的
-                                    val song = withContext(Dispatchers.IO) {
-                                        DownloadStore.toSong(context, item)
-                                    }
-                                    if (song != null) PlayerController.toggleFavorite(song)
-                                    else message = "文件已经不在原处了，没法点心"
-                                }
-                            }) {
+                            // 收藏按规范 key 记账，得先把记录还原成一首歌；
+                            // 文件已经不在了就别收，否则歌单里会多一条点不开的
+                            IconButton(onClick = toggleFav) {
                                 Icon(
                                     imageVector = if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                                     contentDescription = if (fav) "取消点心" else "点心",
@@ -407,11 +431,72 @@ fun DownloadsScreen(
                             }) {
                                 Icon(Icons.Default.Delete, contentDescription = "删除")
                             }
+                            IconButton(onClick = { menuItemId = item.id }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "更多操作")
+                            }
+                            DropdownMenu(
+                                expanded = menuItemId == item.id,
+                                onDismissRequest = { menuItemId = null }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("播放") },
+                                    onClick = {
+                                        menuItemId = null
+                                        DownloadStore.toSong(context, item)?.let { onPlay(it) }
+                                            ?: run { message = "文件已经不在原处了" }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("加到歌单") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.PlaylistAdd, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuItemId = null
+                                        openPicker()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (fav) "取消点心" else "点心") },
+                                    onClick = {
+                                        menuItemId = null
+                                        toggleFav()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("删除文件") },
+                                    onClick = {
+                                        menuItemId = null
+                                        Downloader.delete(context, item)
+                                        version++
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    pickerSong?.let { song ->
+        PlaylistPickerDialog(
+            titles = listOf(song.title),
+            onDismiss = { pickerSong = null },
+            onPick = { playlistId ->
+                val added = addToPlaylist(context, listOf(song), playlistId = playlistId)
+                pickerSong = null
+                shortToast(
+                    context,
+                    if (added > 0) "已加到歌单：${song.title}" else "这首歌已经在歌单里了"
+                )
+            },
+            onCreate = { name ->
+                addToPlaylist(context, listOf(song), newName = name)
+                pickerSong = null
+                shortToast(context, "已新建「$name」并加入")
+            }
+        )
     }
 }
 
